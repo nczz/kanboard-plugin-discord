@@ -82,8 +82,14 @@ class EmbedBuilder extends Base
         // source project at a glance (the title is reserved for the task).
         $projectName = $this->getProjectName($eventData, $project);
         if ($projectName !== '') {
-            $embed['footer'] = array('text' => $projectName);
+            $embed['footer'] = array('text' => $this->truncate($this->escapeMarkdown($projectName), 2048));
         }
+
+        // Discord rejects the whole webhook (HTTP 400) if the embed's combined
+        // text (title + description + field names/values + footer) exceeds 6000
+        // characters. Enforce it as a final safety net by trimming the most
+        // expendable and largest variable part — the description.
+        $this->enforceTotalBudget($embed);
 
         $payload = array(
             'username'    => 'Kanboard',
@@ -102,6 +108,35 @@ class EmbedBuilder extends Base
     }
 
     /**
+     * Enforce Discord's 6000-character total embed budget by trimming the
+     * description (largest, most expendable part) if the combined text of
+     * title + description + field names/values + footer would exceed it.
+     *
+     * @access protected
+     * @param  array $embed  Passed by reference and mutated in place.
+     */
+    protected function enforceTotalBudget(array &$embed)
+    {
+        $budget = 6000;
+
+        $fixed = mb_strlen($embed['title'] ?? '')
+            + mb_strlen(isset($embed['footer']['text']) ? $embed['footer']['text'] : '');
+
+        if (! empty($embed['fields'])) {
+            foreach ($embed['fields'] as $field) {
+                $fixed += mb_strlen($field['name'] ?? '') + mb_strlen($field['value'] ?? '');
+            }
+        }
+
+        $descLen = mb_strlen($embed['description'] ?? '');
+
+        if ($fixed + $descLen > $budget) {
+            $allowed = max(0, $budget - $fixed);
+            $embed['description'] = $this->truncate($embed['description'], $allowed);
+        }
+    }
+
+    /**
      * Embed title: always "#<id> · <task title>" so the reader immediately knows
      * WHICH task the notification is about, regardless of the event type.
      *
@@ -111,13 +146,14 @@ class EmbedBuilder extends Base
     protected function getEmbedTitle(array $eventData, array $project)
     {
         if (empty($eventData['task']['id'])) {
-            return $this->truncate($this->getProjectName($eventData, $project), self::LIMIT_TITLE);
+            return $this->truncate($this->escapeMarkdown($this->getProjectName($eventData, $project)), self::LIMIT_TITLE);
         }
 
         $title = sprintf('#%d', $eventData['task']['id']);
 
         if (! empty($eventData['task']['title'])) {
-            $title .= ' · '.$eventData['task']['title'];
+            // The embed title renders markdown; escape the user-supplied title.
+            $title .= ' · '.$this->escapeMarkdown($eventData['task']['title']);
         }
 
         return $this->truncate($title, self::LIMIT_TITLE);
@@ -178,10 +214,15 @@ class EmbedBuilder extends Base
 
         if ($sentence !== '' && $excerpt !== '') {
             // Content excerpt rendered as a Discord blockquote for visual separation.
-            return $sentence."\n\n> ".str_replace("\n", "\n> ", $excerpt);
+            $description = $sentence."\n\n> ".str_replace("\n", "\n> ", $excerpt);
+        } else {
+            $description = $sentence !== '' ? $sentence : $excerpt;
         }
 
-        return $sentence !== '' ? $sentence : $excerpt;
+        // Final guard: the composed description (sentence + blockquote markers +
+        // excerpt) must never exceed the Discord embed description limit, or the
+        // whole webhook is rejected with HTTP 400 and the notification is lost.
+        return $this->truncate($description, self::LIMIT_DESCRIPTION);
     }
 
     /**
@@ -202,7 +243,23 @@ class EmbedBuilder extends Base
             $sentence = $this->notificationModel->getTitleWithoutAuthor($eventName, $eventData);
         }
 
-        return $this->truncate($this->escapeMarkdown($sentence), self::LIMIT_TITLE);
+        // Kanboard's t()/e() HTML-escape their %s arguments (task titles, column
+        // names, etc.) for web output. Discord renders plaintext, so decode the
+        // entities back before escaping markdown, otherwise "&amp;"/"&#039;" leak.
+        return $this->escapeMarkdown($this->decodeEntities($sentence));
+    }
+
+    /**
+     * Decode HTML entities produced by Kanboard's t()/e() helpers, since the
+     * Discord webhook payload is plaintext, not HTML.
+     *
+     * @access protected
+     * @param  string $text
+     * @return string
+     */
+    protected function decodeEntities($text)
+    {
+        return html_entity_decode((string) $text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
 
     /**
@@ -330,7 +387,7 @@ class EmbedBuilder extends Base
     {
         $parts = array();
 
-        $line = $this->getSubtaskSymbol($subtask).$this->escapeMarkdown((string) $subtask['title']);
+        $line = $this->getSubtaskSymbol($subtask).$this->escapeMarkdown((string) ($subtask['title'] ?? ''));
 
         if (! empty($subtask['status_name'])) {
             $line .= ' ('.t($subtask['status_name']).')';
@@ -466,10 +523,11 @@ class EmbedBuilder extends Base
     {
         $fields = array();
 
-        if (! empty($eventData['task']['assignee_name']) || ! empty($eventData['task']['assignee_username'])) {
+        $assignee = ($eventData['task']['assignee_name'] ?? '') ?: ($eventData['task']['assignee_username'] ?? '');
+        if ($assignee !== '') {
             $fields[] = array(
                 'name'   => t('Assignee'),
-                'value'  => $this->truncate($this->escapeMarkdown($eventData['task']['assignee_name'] ?: $eventData['task']['assignee_username']), self::LIMIT_FIELD_VALUE),
+                'value'  => $this->truncate($this->escapeMarkdown($assignee), self::LIMIT_FIELD_VALUE),
                 'inline' => true,
             );
         }
@@ -491,7 +549,7 @@ class EmbedBuilder extends Base
      */
     protected function getSubtaskSymbol(array $subtask)
     {
-        switch ((int) $subtask['status']) {
+        switch ((int) ($subtask['status'] ?? 0)) {
             case SubtaskModel::STATUS_DONE:
                 return '✅ ';
             case SubtaskModel::STATUS_INPROGRESS:

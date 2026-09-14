@@ -610,4 +610,142 @@ class DiscordNotificationTest extends Base
         $this->assertStringContainsString('Due Date', $desc);
         $this->assertStringNotContainsString('date_modification', $desc);
     }
+
+    public function testDescriptionNeverExceedsDiscordLimit()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'BIG'));
+        // Huge excerpt cap to try to overflow the description field.
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '4096',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array(
+                'id' => 1, 'project_id' => $projectId, 'project_name' => 'BIG', 'title' => 'T',
+                'description' => str_repeat("line\n", 2000), 'owner_id' => 0,
+            ))
+        );
+
+        $embed = $captured['embeds'][0];
+        // description within Discord limit, and total embed within 6000.
+        $this->assertLessThanOrEqual(4096, mb_strlen($embed['description']));
+        $total = mb_strlen($embed['title']) + mb_strlen($embed['description'])
+            + mb_strlen($embed['footer']['text'] ?? '');
+        foreach ($embed['fields'] as $f) {
+            $total += mb_strlen($f['name']) + mb_strlen($f['value']);
+        }
+        $this->assertLessThanOrEqual(6000, $total);
+    }
+
+    public function testHtmlEntitiesFromCoreTitlesAreDecoded()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'ENT'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        // Column title with characters that Kanboard's e() would HTML-escape.
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_MOVE_COLUMN,
+            array('task' => array(
+                'id' => 1, 'project_id' => $projectId, 'project_name' => 'ENT', 'title' => 'T',
+                'column_title' => 'R&D "urgent"', 'owner_id' => 0,
+            ))
+        );
+
+        $desc = $captured['embeds'][0]['description'];
+        // Entities must be decoded for the Discord plaintext path.
+        $this->assertStringNotContainsString('&amp;', $desc);
+        $this->assertStringNotContainsString('&#039;', $desc);
+        $this->assertStringNotContainsString('&quot;', $desc);
+    }
+
+    public function testEmbedTitleEscapesMarkdown()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'MD2'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 1, 'project_id' => $projectId, 'project_name' => 'MD2', 'title' => 'Fix **login**', 'owner_id' => 0))
+        );
+
+        // Markdown control chars in the title must be escaped so it renders literally.
+        $this->assertStringContainsString('\\*\\*login\\*\\*', $captured['embeds'][0]['title']);
+    }
+
+    public function testSubtaskMissingStatusAndTitleDoesNotFatal()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'MISS'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        // Subtask array missing 'status' and 'title' must not raise a warning/fatal.
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\SubtaskModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 9, 'project_id' => $projectId, 'project_name' => 'MISS', 'title' => 'Parent'),
+                'subtask' => array('id' => 3, 'task_id' => 9),
+            )
+        );
+
+        $this->assertArrayHasKey('embeds', $captured);
+    }
 }
