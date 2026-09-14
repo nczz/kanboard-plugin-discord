@@ -329,9 +329,8 @@ class EmbedBuilder extends Base
     }
 
     /**
-     * Human-readable "changed fields" line built from the event's diff, e.g.
-     * "Changed: Priority, Due date". Field keys not worth surfacing (internal
-     * timestamps) are ignored.
+     * Human-readable "changed fields" line for a task update, e.g.
+     * "Changed: Priority, Due Date".
      *
      * @access protected
      * @param  array $eventData
@@ -359,19 +358,11 @@ class EmbedBuilder extends Base
             'swimlane_id'    => t('Swimlane'),
         );
 
-        $ignore = array('date_modification', 'date_moved', 'date_creation');
-        $names = array();
-
-        foreach (array_keys($eventData['changes']) as $field) {
-            if (in_array($field, $ignore, true)) {
-                continue;
-            }
-            $names[] = isset($labels[$field]) ? $labels[$field] : $field;
-        }
-
-        $names = array_unique($names);
-
-        return empty($names) ? '' : t('Changed').': '.$this->escapeMarkdown(implode(', ', $names));
+        return $this->formatChangedFields(
+            $eventData['changes'],
+            $labels,
+            array('date_modification', 'date_moved', 'date_creation')
+        );
     }
 
     /**
@@ -432,10 +423,6 @@ class EmbedBuilder extends Base
      */
     protected function formatSubtaskChanges(array $changes)
     {
-        if (empty($changes)) {
-            return '';
-        }
-
         $labels = array(
             'title'          => t('Title'),
             'status'         => t('Status'),
@@ -444,7 +431,32 @@ class EmbedBuilder extends Base
             'time_spent'     => t('Time spent'),
         );
 
-        $ignore = array('id', 'task_id', 'position');
+        return $this->formatChangedFields(
+            $changes,
+            $labels,
+            array('id', 'task_id', 'position')
+        );
+    }
+
+    /**
+     * Shared builder for a "Changed: <fields>" line from an event diff.
+     *
+     * Maps raw field keys to human labels, drops ignored keys, de-duplicates,
+     * and escapes the result for the Discord plaintext path. This is the single
+     * source of truth for both task and subtask change summaries.
+     *
+     * @access private
+     * @param  array $changes  Field => new value diff.
+     * @param  array $labels   Field key => human label.
+     * @param  array $ignore   Field keys to omit.
+     * @return string          Empty string when nothing worth showing.
+     */
+    private function formatChangedFields(array $changes, array $labels, array $ignore)
+    {
+        if (empty($changes)) {
+            return '';
+        }
+
         $names = array();
 
         foreach (array_keys($changes) as $field) {
