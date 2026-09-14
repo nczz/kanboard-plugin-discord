@@ -494,6 +494,7 @@ class DiscordNotificationTest extends Base
                     'name' => 'Erin', 'username' => 'erin',
                     'time_estimated' => 4, 'time_spent' => 1.5,
                 ),
+                'changes' => array('status' => 1, 'time_spent' => 1.5),
             )
         );
 
@@ -506,6 +507,9 @@ class DiscordNotificationTest extends Base
         $this->assertStringContainsString('1.5/4h', $desc);
         // Status symbol for "in progress".
         $this->assertStringContainsString('🕘', $desc);
+        // Update event lists what changed (Status, Time spent), not internal keys.
+        $this->assertStringContainsString('Changed', $desc);
+        $this->assertStringContainsString('Status', $desc);
     }
 
     public function testSubtaskDetailShownEvenWhenExcerptDisabled()

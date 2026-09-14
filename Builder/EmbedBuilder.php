@@ -223,7 +223,10 @@ class EmbedBuilder extends Base
         // Structured detail — always shown (it is status, not free text).
         if (in_array($eventName, array(SubtaskModel::EVENT_CREATE, SubtaskModel::EVENT_UPDATE, SubtaskModel::EVENT_DELETE), true)
             && ! empty($eventData['subtask'])) {
-            return $this->formatSubtaskDetail($eventData['subtask']);
+            $changes = ($eventName === SubtaskModel::EVENT_UPDATE && ! empty($eventData['changes']) && is_array($eventData['changes']))
+                ? $eventData['changes']
+                : array();
+            return $this->formatSubtaskDetail($eventData['subtask'], $changes);
         }
 
         if ($eventName === TaskFileModel::EVENT_CREATE && ! empty($eventData['file']['name'])) {
@@ -323,7 +326,7 @@ class EmbedBuilder extends Base
      * @param  array $subtask
      * @return string
      */
-    protected function formatSubtaskDetail(array $subtask)
+    protected function formatSubtaskDetail(array $subtask, array $changes = array())
     {
         $parts = array();
 
@@ -351,7 +354,52 @@ class EmbedBuilder extends Base
             $parts[] = sprintf('%s: %s/%sh', t('Time spent'), $this->formatHours($spent), $this->formatHours($estimated));
         }
 
-        return implode(' · ', $parts);
+        $detail = implode(' · ', $parts);
+
+        // On update, prepend which fields changed so the reader sees what was
+        // modified (the line above already shows the resulting state).
+        $changedLine = $this->formatSubtaskChanges($changes);
+        if ($changedLine !== '') {
+            $detail = $changedLine."\n".$detail;
+        }
+
+        return $detail;
+    }
+
+    /**
+     * Build a "Changed: ..." line for a subtask update from the event diff.
+     *
+     * @access protected
+     * @param  array $changes
+     * @return string
+     */
+    protected function formatSubtaskChanges(array $changes)
+    {
+        if (empty($changes)) {
+            return '';
+        }
+
+        $labels = array(
+            'title'          => t('Title'),
+            'status'         => t('Status'),
+            'user_id'        => t('Assignee'),
+            'time_estimated' => t('Time estimated'),
+            'time_spent'     => t('Time spent'),
+        );
+
+        $ignore = array('id', 'task_id', 'position');
+        $names = array();
+
+        foreach (array_keys($changes) as $field) {
+            if (in_array($field, $ignore, true)) {
+                continue;
+            }
+            $names[] = isset($labels[$field]) ? $labels[$field] : $field;
+        }
+
+        $names = array_unique($names);
+
+        return empty($names) ? '' : t('Changed').': '.$this->escapeMarkdown(implode(', ', $names));
     }
 
     /**
