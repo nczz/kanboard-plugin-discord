@@ -78,9 +78,28 @@ each project.
 Now that user will be pinged in Discord when assigned to a task or mentioned in
 a comment.
 
+Updating on the server (git pull)
+---------------------------------
+
+When Kanboard runs in Docker with the host `plugins/` directory bind-mounted
+into the container, deploy this plugin as a git clone and update it in place:
+
+```
+# one-time: clone into the mounted plugins directory as "Discord"
+cd <host-plugins-dir>
+git clone https://github.com/nczz/kanboard-plugin-discord.git Discord
+
+# to update later
+cd <host-plugins-dir>/Discord
+git pull
+```
+
+No container restart is required — Kanboard loads plugins on each request, and
+this plugin has no database schema migrations. The clone's `.git` and `Test/`
+directories are ignored by the plugin loader.
+
 Troubleshooting
 ---------------
-
 - Enable the Kanboard debug mode; HTTP client errors are logged to
   `data/debug.log` or syslog.
 - Make sure the webhook URL host is `discord.com` (or a Discord subdomain) and
