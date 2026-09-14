@@ -68,6 +68,25 @@ Configuration
 To send several projects to the same channel, paste the same webhook URL into
 each project.
 
+### Card layout and content length
+
+Each notification card is designed to convey the **status** completely while
+keeping the **content** compact so channels don't get flooded:
+
+- **Title** always identifies the task: `#<id> · <task title>`.
+- **Description** always starts with a full action sentence (who did what,
+  e.g. "Alice moved the task #42 to the column In Progress").
+- Below that, an optional **content excerpt** (task description / comment /
+  subtask) is shown, trimmed to a configurable length.
+
+The excerpt length is set per project under **Settings > Integrations >
+Discord > Content excerpt length**:
+
+- Leave empty to use the default (280 characters).
+- Set `0` to hide content excerpts entirely (status-only cards).
+- A global default can also be set via the `discord_excerpt_length`
+  application setting.
+
 ### 2. Enable Discord mentions for a user
 
 1. In Discord: enable **Developer Mode** (User Settings > Advanced), right-click

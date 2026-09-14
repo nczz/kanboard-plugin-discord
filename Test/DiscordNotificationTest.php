@@ -114,14 +114,113 @@ class DiscordNotificationTest extends Base
         $this->assertSame(array('parse' => array('users')), $captured['allowed_mentions']);
 
         $embed = $captured['embeds'][0];
-        $this->assertStringContainsString('[My Project]', $embed['title']);
-        $this->assertSame('Some description', $embed['description']);
+        // Title always identifies the task: "#42 · <title>"
+        $this->assertStringContainsString('#42', $embed['title']);
+        $this->assertStringContainsString('Fix the bug', $embed['title']);
+        // Description leads with a complete action sentence, then the excerpt.
+        $this->assertStringContainsString('#42', $embed['description']);
+        $this->assertStringContainsString('Some description', $embed['description']);
+        // Footer carries the project name.
+        $this->assertSame('My Project', $embed['footer']['text']);
         $this->assertIsInt($embed['color']);
 
         // Fields include assignee + column
         $fieldNames = array_column($embed['fields'], 'value');
         $this->assertContains('Alice', $fieldNames);
         $this->assertContains('Backlog', $fieldNames);
+    }
+
+    public function testExcerptLengthDefaultTruncatesContent()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'EX'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $longDesc = str_repeat('B', 1000);
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 5, 'project_id' => $projectId, 'project_name' => 'EX', 'title' => 't', 'description' => $longDesc, 'owner_id' => 0))
+        );
+
+        // The excerpt portion must be capped near the default (280), not 1000.
+        // The description also holds the (short) action sentence, so allow headroom.
+        $this->assertLessThan(500, mb_strlen($captured['embeds'][0]['description']));
+    }
+
+    public function testExcerptLengthConfigurablePerProject()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'EX2'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '10',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 5, 'project_id' => $projectId, 'project_name' => 'EX2', 'title' => 't', 'description' => str_repeat('C', 200), 'owner_id' => 0))
+        );
+
+        // With a 10-char excerpt cap, the long run of "C" must be trimmed hard.
+        $this->assertLessThanOrEqual(11, substr_count($captured['embeds'][0]['description'], 'C'));
+    }
+
+    public function testExcerptLengthZeroHidesContent()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'EX0'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '0',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 5, 'project_id' => $projectId, 'project_name' => 'EX0', 'title' => 't', 'description' => 'this should be hidden', 'owner_id' => 0))
+        );
+
+        // Excerpt hidden -> the task description text must not appear.
+        $this->assertStringNotContainsString('this should be hidden', $captured['embeds'][0]['description']);
+        // But the action sentence (status) is still present.
+        $this->assertNotSame('', $captured['embeds'][0]['description']);
     }
 
     public function testAssigneeWithoutDiscordIdProducesNoMention()
