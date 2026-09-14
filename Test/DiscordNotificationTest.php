@@ -463,4 +463,147 @@ class DiscordNotificationTest extends Base
 
         $this->assertLessThanOrEqual(256, mb_strlen($captured['embeds'][0]['title']));
     }
+
+    public function testSubtaskDetailIncludesStatusAssigneeAndTime()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'ST'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\SubtaskModel::EVENT_UPDATE,
+            array(
+                'task' => array('id' => 9, 'project_id' => $projectId, 'project_name' => 'ST', 'title' => 'Parent task'),
+                'subtask' => array(
+                    'id' => 3, 'task_id' => 9, 'title' => 'Write the docs',
+                    'status' => 1, 'status_name' => 'In progress',
+                    'name' => 'Erin', 'username' => 'erin',
+                    'time_estimated' => 4, 'time_spent' => 1.5,
+                ),
+            )
+        );
+
+        $desc = $captured['embeds'][0]['description'];
+        // Status sentence present.
+        $this->assertStringContainsString('#9', $desc);
+        // Subtask detail: title, status, assignee, time.
+        $this->assertStringContainsString('Write the docs', $desc);
+        $this->assertStringContainsString('Erin', $desc);
+        $this->assertStringContainsString('1.5/4h', $desc);
+        // Status symbol for "in progress".
+        $this->assertStringContainsString('🕘', $desc);
+    }
+
+    public function testSubtaskDetailShownEvenWhenExcerptDisabled()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'ST0'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '0',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\SubtaskModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 9, 'project_id' => $projectId, 'project_name' => 'ST0', 'title' => 'Parent'),
+                'subtask' => array('id' => 3, 'task_id' => 9, 'title' => 'A subtask', 'status' => 0, 'status_name' => 'Todo'),
+            )
+        );
+
+        // Subtask detail is structured status, so it must appear even with excerpt=0.
+        $this->assertStringContainsString('A subtask', $captured['embeds'][0]['description']);
+    }
+
+    public function testAttachmentShowsFilename()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'AT'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskFileModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 9, 'project_id' => $projectId, 'project_name' => 'AT', 'title' => 'T'),
+                'file' => array('name' => 'design-spec.pdf', 'task_id' => 9),
+            )
+        );
+
+        $this->assertStringContainsString('design-spec.pdf', $captured['embeds'][0]['description']);
+    }
+
+    public function testTaskUpdateShowsChangedFields()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'UP'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_UPDATE,
+            array(
+                'task' => array('id' => 12, 'project_id' => $projectId, 'project_name' => 'UP', 'title' => 'T', 'owner_id' => 0),
+                'changes' => array('priority' => 2, 'due_date' => 1710000000, 'date_modification' => 123),
+            )
+        );
+
+        $desc = $captured['embeds'][0]['description'];
+        // "Changed" line lists human labels, ignores internal timestamps.
+        $this->assertStringContainsString('Priority', $desc);
+        $this->assertStringContainsString('Due Date', $desc);
+        $this->assertStringNotContainsString('date_modification', $desc);
+    }
 }

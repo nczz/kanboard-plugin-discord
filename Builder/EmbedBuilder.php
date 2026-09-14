@@ -206,17 +206,32 @@ class EmbedBuilder extends Base
     }
 
     /**
-     * Short, length-capped excerpt of the event's content payload. Only the
-     * "content" side (description / comment / subtask) is trimmed here; the
-     * status sentence above is always shown in full.
+     * The event's content block shown under the status sentence.
+     *
+     * Two kinds of content are distinguished:
+     *   - Structured detail (subtask, attachment): concise status-bearing
+     *     information that is ALWAYS shown, because it is part of "what changed",
+     *     not free-form text.
+     *   - Free text (task description, comment): trimmed to the configurable
+     *     excerpt length, and fully hidden when the length is set to 0.
      *
      * @access protected
      * @return string
      */
     protected function getExcerpt($eventName, array $eventData, array $project)
     {
-        $max = $this->getExcerptLength($project);
+        // Structured detail — always shown (it is status, not free text).
+        if (in_array($eventName, array(SubtaskModel::EVENT_CREATE, SubtaskModel::EVENT_UPDATE, SubtaskModel::EVENT_DELETE), true)
+            && ! empty($eventData['subtask'])) {
+            return $this->formatSubtaskDetail($eventData['subtask']);
+        }
 
+        if ($eventName === TaskFileModel::EVENT_CREATE && ! empty($eventData['file']['name'])) {
+            return '📎 '.$this->escapeMarkdown($eventData['file']['name']);
+        }
+
+        // Free-text content — trimmed to the configurable length (0 hides it).
+        $max = $this->getExcerptLength($project);
         if ($max <= 0) {
             return '';
         }
@@ -226,11 +241,6 @@ class EmbedBuilder extends Base
             CommentModel::EVENT_UPDATE,
             CommentModel::EVENT_DELETE,
             CommentModel::EVENT_USER_MENTION,
-        );
-        $subtaskEvents = array(
-            SubtaskModel::EVENT_CREATE,
-            SubtaskModel::EVENT_UPDATE,
-            SubtaskModel::EVENT_DELETE,
         );
         $descriptionEvents = array(
             TaskModel::EVENT_CREATE,
@@ -242,8 +252,13 @@ class EmbedBuilder extends Base
             return '💬 '.$this->truncate($this->escapeMarkdown($eventData['comment']['comment']), $max);
         }
 
-        if (in_array($eventName, $subtaskEvents, true) && isset($eventData['subtask'])) {
-            return $this->getSubtaskSymbol($eventData['subtask']).$this->truncate($this->escapeMarkdown($eventData['subtask']['title']), $max);
+        // task.update: prefer showing WHICH fields changed (more informative than
+        // repeating the static description), falling back to the description.
+        if ($eventName === TaskModel::EVENT_UPDATE) {
+            $changed = $this->getChangedFieldsLine($eventData);
+            if ($changed !== '') {
+                return $changed;
+            }
         }
 
         if (in_array($eventName, $descriptionEvents, true) && ! empty($eventData['task']['description'])) {
@@ -251,6 +266,108 @@ class EmbedBuilder extends Base
         }
 
         return '';
+    }
+
+    /**
+     * Human-readable "changed fields" line built from the event's diff, e.g.
+     * "Changed: Priority, Due date". Field keys not worth surfacing (internal
+     * timestamps) are ignored.
+     *
+     * @access protected
+     * @param  array $eventData
+     * @return string
+     */
+    protected function getChangedFieldsLine(array $eventData)
+    {
+        if (empty($eventData['changes']) || ! is_array($eventData['changes'])) {
+            return '';
+        }
+
+        $labels = array(
+            'title'          => t('Title'),
+            'description'    => t('Description'),
+            'owner_id'       => t('Assignee'),
+            'color_id'       => t('Color'),
+            'due_date'       => t('Due Date'),
+            'date_due'       => t('Due Date'),
+            'priority'       => t('Priority'),
+            'category_id'    => t('Category'),
+            'score'          => t('Complexity'),
+            'time_estimated' => t('Time estimated'),
+            'time_spent'     => t('Time spent'),
+            'column_id'      => t('Column'),
+            'swimlane_id'    => t('Swimlane'),
+        );
+
+        $ignore = array('date_modification', 'date_moved', 'date_creation');
+        $names = array();
+
+        foreach (array_keys($eventData['changes']) as $field) {
+            if (in_array($field, $ignore, true)) {
+                continue;
+            }
+            $names[] = isset($labels[$field]) ? $labels[$field] : $field;
+        }
+
+        $names = array_unique($names);
+
+        return empty($names) ? '' : t('Changed').': '.$this->escapeMarkdown(implode(', ', $names));
+    }
+
+    /**
+     * Format subtask detail: status symbol, title, status name, assignee and
+     * time tracking (when present). Concise and always shown so the reader sees
+     * exactly which subtask changed and its current state.
+     *
+     * @access protected
+     * @param  array $subtask
+     * @return string
+     */
+    protected function formatSubtaskDetail(array $subtask)
+    {
+        $parts = array();
+
+        $line = $this->getSubtaskSymbol($subtask).$this->escapeMarkdown((string) $subtask['title']);
+
+        if (! empty($subtask['status_name'])) {
+            $line .= ' ('.t($subtask['status_name']).')';
+        }
+
+        $parts[] = $line;
+
+        $assignee = '';
+        if (! empty($subtask['name'])) {
+            $assignee = $subtask['name'];
+        } elseif (! empty($subtask['username'])) {
+            $assignee = $subtask['username'];
+        }
+        if ($assignee !== '') {
+            $parts[] = t('Assignee').': '.$this->escapeMarkdown($assignee);
+        }
+
+        $estimated = isset($subtask['time_estimated']) ? (float) $subtask['time_estimated'] : 0;
+        $spent = isset($subtask['time_spent']) ? (float) $subtask['time_spent'] : 0;
+        if ($estimated > 0 || $spent > 0) {
+            $parts[] = sprintf('%s: %s/%sh', t('Time spent'), $this->formatHours($spent), $this->formatHours($estimated));
+        }
+
+        return implode(' · ', $parts);
+    }
+
+    /**
+     * Format an hours value without trailing ".0".
+     *
+     * @access protected
+     * @param  float $hours
+     * @return string
+     */
+    protected function formatHours($hours)
+    {
+        if ($hours == (int) $hours) {
+            return (string) (int) $hours;
+        }
+
+        return rtrim(rtrim(number_format($hours, 2, '.', ''), '0'), '.');
     }
 
     /**

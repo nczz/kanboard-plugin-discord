@@ -16,5 +16,6 @@ return array(
         => '取得方式：在 Discord 開啟開發者模式（設定 > 進階），然後右鍵點你的名字選擇「複製使用者 ID」。',
     'Assignee' => '負責人',
     'Column' => '欄位',
+    'Changed' => '變更欄位',
     'Save' => '儲存',
 );
