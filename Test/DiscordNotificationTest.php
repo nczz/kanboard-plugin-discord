@@ -213,4 +213,155 @@ class DiscordNotificationTest extends Base
         $this->assertStringContainsString('<@111222333444555666>', $captured['content']);
         $this->assertStringContainsString('💬', $captured['embeds'][0]['description']);
     }
+
+    public function testOverdueFansOutPerTaskWithDistinctTitles()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'OD'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $titles = array();
+        $http->expects($this->exactly(2))->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$titles) {
+                $titles[] = $payload['embeds'][0]['title'];
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_OVERDUE,
+            array('tasks' => array(
+                array('id' => 101, 'project_id' => $projectId, 'project_name' => 'OD', 'title' => 'First overdue', 'owner_id' => 0),
+                array('id' => 202, 'project_id' => $projectId, 'project_name' => 'OD', 'title' => 'Second overdue', 'owner_id' => 0),
+            ))
+        );
+
+        // Each embed must reference its own task id (C1 regression).
+        $this->assertStringContainsString('101', $titles[0]);
+        $this->assertStringContainsString('202', $titles[1]);
+        $this->assertNotSame($titles[0], $titles[1]);
+    }
+
+    public function testInjectionUserIdProducesNoMention()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'INJ'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+        $userId = $userModel->create(array('username' => 'dan', 'name' => 'Dan'));
+        // Malicious / malformed values must be rejected by ctype_digit.
+        $this->container['userMetadataModel']->save($userId, array(
+            DiscordNotification::META_USER_ID => '@everyone <@&12345>',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 1, 'project_id' => $projectId, 'project_name' => 'INJ', 'title' => 't', 'owner_id' => $userId))
+        );
+
+        $this->assertArrayNotHasKey('content', $captured);
+    }
+
+    public function testMarkdownInDescriptionIsEscaped()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'MD'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array(
+                'id' => 1, 'project_id' => $projectId, 'project_name' => 'MD', 'title' => 't',
+                'description' => 'click [here](http://evil.example) **now**', 'owner_id' => 0,
+            ))
+        );
+
+        // Markdown control chars must be backslash-escaped (no raw masked link).
+        $this->assertStringNotContainsString('[here](http://evil.example)', $captured['embeds'][0]['description']);
+        $this->assertStringContainsString('\\[here\\]', $captured['embeds'][0]['description']);
+    }
+
+    public function testNonWebhookDiscordPathRejected()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'P'));
+        // Valid host but not a webhook path.
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/login',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 1, 'project_id' => $projectId, 'project_name' => 'P', 'title' => 't', 'owner_id' => 0))
+        );
+    }
+
+    public function testLongTitleTruncatedToDiscordLimit()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'LT'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $longTitle = str_repeat('A', 500);
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 1, 'project_id' => $projectId, 'project_name' => 'LT', 'title' => $longTitle, 'owner_id' => 0))
+        );
+
+        $this->assertLessThanOrEqual(256, mb_strlen($captured['embeds'][0]['title']));
+    }
 }

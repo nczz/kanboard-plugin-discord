@@ -35,10 +35,24 @@ Installation
 ------------
 
 Clone or copy this repository into the folder `plugins/Discord` of your Kanboard
-installation. The folder name is case-sensitive and **must** be `Discord`.
+installation. The folder name is case-sensitive and **must** be exactly
+`Discord` (not the repository name), because Kanboard resolves the plugin
+namespace and templates from the capitalized folder name.
 
 ```
 git clone https://github.com/nczz/kanboard-plugin-discord.git plugins/Discord
+```
+
+Running the tests
+-----------------
+
+The tests reuse Kanboard's own PHPUnit harness, so they must run from inside a
+Kanboard checkout with this plugin placed (or symlinked) at `plugins/Discord`:
+
+```
+# from the Kanboard root, with dev dependencies installed
+ln -s /path/to/kanboard-plugin-discord plugins/Discord
+./vendor/bin/phpunit -c plugins/Discord/Test/phpunit.xml
 ```
 
 Configuration

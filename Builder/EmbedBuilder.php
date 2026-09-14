@@ -33,6 +33,15 @@ class EmbedBuilder extends Base
     const COLOR_DELETE  = 0xE74C3C; // red
 
     /**
+     * Discord API hard limits (characters).
+     * @see https://discord.com/developers/docs/resources/channel#embed-object-embed-limits
+     */
+    const LIMIT_TITLE       = 256;
+    const LIMIT_DESCRIPTION = 4096;
+    const LIMIT_FIELD_VALUE = 1024;
+    const LIMIT_CONTENT     = 2000;
+
+    /**
      * Build the full Discord webhook payload for an event.
      *
      * @access public
@@ -67,7 +76,7 @@ class EmbedBuilder extends Base
 
         // The content field is what triggers Discord push notifications / pings.
         if ($mentionContent !== '') {
-            $payload['content'] = $mentionContent;
+            $payload['content'] = $this->truncate($mentionContent, self::LIMIT_CONTENT);
             // Restrict pings to explicitly listed users to avoid accidental @everyone.
             $payload['allowed_mentions'] = array('parse' => array('users'));
         }
@@ -89,7 +98,7 @@ class EmbedBuilder extends Base
 
         $summary = $this->notificationModel->getTitleWithoutAuthor($eventName, $eventData);
 
-        return sprintf('[%s] %s', $projectName, $summary);
+        return $this->truncate(sprintf('[%s] %s', $projectName, $summary), self::LIMIT_TITLE);
     }
 
     /**
@@ -139,15 +148,15 @@ class EmbedBuilder extends Base
         );
 
         if (in_array($eventName, $commentEvents, true) && ! empty($eventData['comment']['comment'])) {
-            return $this->truncate('💬 '.$eventData['comment']['comment']);
+            return $this->truncate('💬 '.$this->escapeMarkdown($eventData['comment']['comment']), self::LIMIT_DESCRIPTION);
         }
 
         if (in_array($eventName, $subtaskEvents, true) && isset($eventData['subtask'])) {
-            return $this->truncate('↳ '.$this->getSubtaskSymbol($eventData['subtask']).$eventData['subtask']['title']);
+            return $this->truncate('↳ '.$this->getSubtaskSymbol($eventData['subtask']).$this->escapeMarkdown($eventData['subtask']['title']), self::LIMIT_DESCRIPTION);
         }
 
         if (in_array($eventName, $descriptionEvents, true) && ! empty($eventData['task']['description'])) {
-            return $this->truncate($eventData['task']['description']);
+            return $this->truncate($this->escapeMarkdown($eventData['task']['description']), self::LIMIT_DESCRIPTION);
         }
 
         return '';
@@ -166,7 +175,7 @@ class EmbedBuilder extends Base
         if (! empty($eventData['task']['assignee_name']) || ! empty($eventData['task']['assignee_username'])) {
             $fields[] = array(
                 'name'   => t('Assignee'),
-                'value'  => $eventData['task']['assignee_name'] ?: $eventData['task']['assignee_username'],
+                'value'  => $this->truncate($this->escapeMarkdown($eventData['task']['assignee_name'] ?: $eventData['task']['assignee_username']), self::LIMIT_FIELD_VALUE),
                 'inline' => true,
             );
         }
@@ -174,7 +183,7 @@ class EmbedBuilder extends Base
         if (! empty($eventData['task']['column_title'])) {
             $fields[] = array(
                 'name'   => t('Column'),
-                'value'  => $eventData['task']['column_title'],
+                'value'  => $this->truncate($this->escapeMarkdown($eventData['task']['column_title']), self::LIMIT_FIELD_VALUE),
                 'inline' => true,
             );
         }
@@ -241,19 +250,39 @@ class EmbedBuilder extends Base
     }
 
     /**
-     * Truncate text to stay within Discord embed description limits (4096 chars).
+     * Truncate text to stay within a Discord field character limit.
      *
      * @access protected
-     * @param  string $text
+     * @param  string  $text
+     * @param  integer $max
      * @return string
      */
-    protected function truncate($text)
+    protected function truncate($text, $max)
     {
-        $max = 2000;
         if (mb_strlen($text) > $max) {
             return mb_substr($text, 0, $max - 1).'…';
         }
 
         return $text;
+    }
+
+    /**
+     * Escape Discord markdown control characters in user-supplied text.
+     *
+     * Kanboard passes task titles / descriptions / comments verbatim. Discord
+     * renders markdown (bold, links, spoilers, code) inside embeds, so raw user
+     * input could garble the card or embed a masked phishing link. Prefixing the
+     * markdown control characters with a backslash renders them literally.
+     *
+     * Note: embeds never trigger pings regardless (only the content field with
+     * allowed_mentions does), so this is display hardening, not a ping guard.
+     *
+     * @access protected
+     * @param  string $text
+     * @return string
+     */
+    protected function escapeMarkdown($text)
+    {
+        return preg_replace('/([\\\\`*_~|>\[\]()#-])/', '\\\\$1', (string) $text);
     }
 }

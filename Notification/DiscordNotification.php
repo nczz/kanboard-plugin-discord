@@ -61,6 +61,11 @@ class DiscordNotification extends Base implements NotificationInterface
         }
 
         $project = $this->projectModel->getById($projectId);
+
+        if (empty($project)) {
+            return;
+        }
+
         $mention = $this->buildMention($user['id']);
 
         $this->send($webhook, $project, $eventName, $eventData, $mention);
@@ -87,6 +92,10 @@ class DiscordNotification extends Base implements NotificationInterface
             foreach ($eventData['tasks'] as $task) {
                 $singleEvent = $eventData;
                 $singleEvent['task'] = $task;
+                // Reduce the tasks list to this single task so the core title
+                // builder (which reads $eventData['tasks'] for overdue events)
+                // renders THIS task instead of the aggregate count / first task.
+                $singleEvent['tasks'] = array($task);
                 $mention = $this->buildMention($this->getAssigneeId($task));
                 $this->send($webhook, $project, $eventName, $singleEvent, $mention);
             }
@@ -154,13 +163,23 @@ class DiscordNotification extends Base implements NotificationInterface
         $host = strtolower($parts['host']);
         $allowedHosts = array('discord.com', 'discordapp.com', 'ptb.discord.com', 'canary.discord.com');
 
+        $hostAllowed = false;
         foreach ($allowedHosts as $allowed) {
             if ($host === $allowed || substr($host, -strlen('.'.$allowed)) === '.'.$allowed) {
-                return true;
+                $hostAllowed = true;
+                break;
             }
         }
 
-        return false;
+        if (! $hostAllowed) {
+            return false;
+        }
+
+        // Discord webhook endpoints always live under /api/webhooks/. Rejecting
+        // other Discord paths prevents pointing the plugin at arbitrary endpoints.
+        $path = isset($parts['path']) ? $parts['path'] : '';
+
+        return strpos($path, '/api/webhooks/') === 0 || strpos($path, '/api/v') === 0;
     }
 
     /**
