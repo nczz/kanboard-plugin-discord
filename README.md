@@ -20,6 +20,8 @@ Features
 - Rich embed cards with event-specific colors, the task link, assignee and column.
 - Discord mentions for the assignee (on project events) and for the mentioned
   user (on @mention events).
+- Comment @mentions avoid double-pinging the assignee when Kanboard dispatches a
+  dedicated mention notification for the mentioned project member.
 - No external dependencies: uses Kanboard's built-in HTTP client.
 - SSRF protection: only official Discord webhook hosts over HTTPS are accepted,
   and private-network URLs are blocked (unless `WEBHOOK_ALLOW_PRIVATE_NETWORKS`
@@ -93,9 +95,13 @@ Discord > Content excerpt length**:
    a user and choose **Copy User ID**.
 2. In Kanboard: go to **My profile > Integrations > Discord**, paste the numeric
    Discord User ID and save.
+3. In Kanboard: go to **My profile > Notifications** and enable the **Discord**
+   notification type. This lets Kanboard's dedicated @mention path call the
+   plugin for mentioned users.
 
 Now that user will be pinged in Discord when assigned to a task or mentioned in
-a comment.
+a comment. Comment @mentions suppress the assignee ping only when the mentioned
+user can receive that dedicated Discord mention notification.
 
 Updating on the server (git pull)
 ---------------------------------

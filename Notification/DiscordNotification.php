@@ -4,6 +4,7 @@ namespace Kanboard\Plugin\Discord\Notification;
 
 use Kanboard\Core\Base;
 use Kanboard\Core\Notification\NotificationInterface;
+use Kanboard\Model\CommentModel;
 use Kanboard\Model\TaskModel;
 use Kanboard\Plugin\Discord\Builder\EmbedBuilder;
 
@@ -31,17 +32,20 @@ class DiscordNotification extends Base implements NotificationInterface
     const META_WEBHOOK_URL = 'discord_webhook_url';
 
     /**
+     * Notification type key registered with Kanboard.
+     */
+    const TYPE = 'discord';
+
+    /**
      * User metadata key holding the numeric Discord User ID (for @mentions).
      */
     const META_USER_ID = 'discord_user_id';
 
     /**
-     * Send notification to a user.
-     *
-     * Only reached for @mention events (NotificationJob short-circuits to this
-     * path when event_data['mention'] is set). We deliver to the project channel
-     * and ping the mentioned user's Discord ID.
-     *
+     * Reached for Kanboard user-notification deliveries. This plugin only sends
+     * Discord user pings for explicit @mention events; regular user
+     * notifications are intentionally handled by notifyProject() so the project
+     * channel receives one card and, when appropriate, one assignee ping.
      * @access public
      * @param  array  $user
      * @param  string $eventName
@@ -49,6 +53,10 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     public function notifyUser(array $user, $eventName, array $eventData)
     {
+        if (! in_array($eventName, array(TaskModel::EVENT_USER_MENTION, CommentModel::EVENT_USER_MENTION), true)) {
+            return;
+        }
+
         if (empty($eventData['task']['project_id'])) {
             return;
         }
@@ -67,6 +75,9 @@ class DiscordNotification extends Base implements NotificationInterface
         }
 
         $mention = $this->buildMention($user['id']);
+        if ($mention === '') {
+            return;
+        }
 
         $this->send($webhook, $project, $eventName, $eventData, $mention);
     }
@@ -104,10 +115,105 @@ class DiscordNotification extends Base implements NotificationInterface
 
         $mention = '';
         if (! empty($eventData['task'])) {
-            $mention = $this->buildMention($this->getAssigneeId($eventData['task']));
+            $mention = $this->getMentionForEvent($eventName, $eventData);
         }
 
         $this->send($webhook, $project, $eventName, $eventData, $mention);
+    }
+
+    /**
+     * Decide who to ping on the project-channel card.
+     *
+     * Priority for a NEW comment (comment.create): if the comment text mentions
+     * a project member who can receive a Discord @mention via Kanboard's user
+     * notification path, Kanboard fires notifyUser() for that user on
+     * comment.create, so this channel card must NOT additionally ping the task
+     * assignee (which would ping the wrong person). Only when no Discord
+     * @mention can be dispatched do we fall back to the task assignee.
+     *
+     * NOTE: this suppression applies to comment.create ONLY. Kanboard does not
+     * dispatch the @mention path for comment.update (see CommentEventJob), so an
+     * edited comment has no dedicated notification to hand the mentioned users
+     * off to. For updates (and every other event) we therefore keep the existing
+     * behaviour and ping the task assignee, so the notification always reaches
+     * someone.
+     *
+     * @access protected
+     * @param  string $eventName
+     * @param  array  $eventData
+     * @return string  Discord mention string, or empty when nobody to ping.
+     */
+    protected function getMentionForEvent($eventName, array $eventData)
+    {
+        if ($eventName === CommentModel::EVENT_CREATE && ! empty($eventData['comment']['comment'])) {
+            $projectId = (int) ($eventData['task']['project_id'] ?? 0);
+            // Kanboard never sends an @mention to the comment author (even a
+            // self-mention), so exclude them here too; otherwise a self-mention
+            // would suppress the assignee ping and the comment would notify nobody.
+            $authorId = (int) ($eventData['comment']['user_id'] ?? 0);
+
+            // Comment mentions another member who can receive the dedicated
+            // Discord @mention notification; do not ping the assignee.
+            if ($this->commentMentionsMember($eventData['comment']['comment'], $projectId, $authorId)) {
+                return '';
+            }
+        }
+
+        return $this->buildMention($this->getAssigneeId($eventData['task']));
+    }
+
+    /**
+     * Mirrors the conditions that make this plugin's Kanboard user-notification
+     * path deliver a real Discord ping: scan "@username" tokens, keep only
+     * notification-enabled users, ignore the comment author, confirm project
+     * membership, selected Discord notification type, and a valid Discord ID.
+     *
+     * @access protected
+     * @param  string  $text
+     * @param  integer $projectId
+     * @param  integer $excludeUserId  User id to ignore (the comment author).
+     * @return boolean
+     */
+    protected function commentMentionsMember($text, $projectId, $excludeUserId = 0)
+    {
+        if ($projectId <= 0 || $text === '' || ! preg_match_all('/@([^\s,!:?]+)/', $text, $matches)) {
+            return false;
+        }
+
+        $usernames = array_map(function ($username) {
+            return rtrim($username, '.');
+        }, $matches[1]);
+
+        $users = $this->db->table(\Kanboard\Model\UserModel::TABLE)
+            ->columns('id')
+            ->in('username', array_unique($usernames))
+            ->eq('notifications_enabled', 1)
+            ->findAll();
+
+        foreach ($users as $user) {
+            if ((int) $user['id'] === (int) $excludeUserId) {
+                continue;
+            }
+            if ($this->projectPermissionModel->isMember($projectId, $user['id'])
+                && $this->userCanReceiveDiscordMention($user['id'])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether Kanboard can route a dedicated Discord @mention notification to a user.
+     *
+     * @access protected
+     * @param  integer $userId
+     * @return boolean
+     */
+    protected function userCanReceiveDiscordMention($userId)
+    {
+        return in_array(self::TYPE, $this->userNotificationTypeModel->getSelectedTypes($userId), true)
+            && $this->buildMention($userId) !== '';
     }
 
     /**
@@ -175,11 +281,14 @@ class DiscordNotification extends Base implements NotificationInterface
             return false;
         }
 
-        // Discord webhook endpoints always live under /api/webhooks/. Rejecting
-        // other Discord paths prevents pointing the plugin at arbitrary endpoints.
+        // Discord webhook execution endpoints are exactly:
+        //   /api/webhooks/{id}/{token}
+        //   /api/v<N>/webhooks/{id}/{token}
+        // Reject incomplete URLs and webhook subresources (/messages, /slack,
+        // /github, ...), because this plugin posts native Discord webhook JSON.
         $path = isset($parts['path']) ? $parts['path'] : '';
 
-        return strpos($path, '/api/webhooks/') === 0 || strpos($path, '/api/v') === 0;
+        return preg_match('#^/api/(?:v[0-9]+/)?webhooks/[0-9]+/[A-Za-z0-9._-]+/?$#', $path) === 1;
     }
 
     /**

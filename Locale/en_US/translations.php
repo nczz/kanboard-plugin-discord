@@ -22,6 +22,8 @@ return array(
         => 'Enter your numeric Discord User ID to be mentioned (pinged) in Discord notifications when you are assigned to a task or mentioned in a comment.',
     'To find it: enable Developer Mode in Discord (Settings > Advanced), then right-click your name and choose "Copy User ID".'
         => 'To find it: enable Developer Mode in Discord (Settings > Advanced), then right-click your name and choose "Copy User ID".',
+    'For comment @mentions, also enable the Discord notification type in your Kanboard notification settings.'
+        => 'For comment @mentions, also enable the Discord notification type in your Kanboard notification settings.',
     'Assignee' => 'Assignee',
     'Column' => 'Column',
     'Changed' => 'Changed',

@@ -29,10 +29,19 @@ class Plugin extends Base
         // message is actually sent is gated by the presence of a webhook URL in
         // the project metadata (see DiscordNotification::notifyProject()).
         $this->projectNotificationTypeModel->setType(
-            'discord',
+            DiscordNotification::TYPE,
             'Discord',
             '\Kanboard\Plugin\Discord\Notification\DiscordNotification',
             true
+        );
+
+        // Register the same class as an opt-in user notification type so
+        // Kanboard's dedicated @mention path can call notifyUser(). The class
+        // intentionally ignores non-mention user notifications.
+        $this->userNotificationTypeModel->setType(
+            DiscordNotification::TYPE,
+            'Discord',
+            '\Kanboard\Plugin\Discord\Notification\DiscordNotification'
         );
 
         // Attach the project-level settings form (webhook URL + per-event toggles)

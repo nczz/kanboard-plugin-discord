@@ -3,7 +3,9 @@
 namespace KanboardTests\units\Plugin\Discord;
 
 use KanboardTests\units\Base;
+use Kanboard\Core\Security\Role;
 use Kanboard\Model\ProjectModel;
+use Kanboard\Model\ProjectUserRoleModel;
 use Kanboard\Model\TaskCreationModel;
 use Kanboard\Model\UserModel;
 use Kanboard\Plugin\Discord\Notification\DiscordNotification;
@@ -36,8 +38,11 @@ class DiscordNotificationTest extends Base
     public function testPluginRegistersDiscordType()
     {
         $this->loadPlugin();
-        $types = $this->container['projectNotificationTypeModel']->getHiddenTypes();
-        $this->assertContains('discord', $types);
+        $projectTypes = $this->container['projectNotificationTypeModel']->getHiddenTypes();
+        $this->assertContains(DiscordNotification::TYPE, $projectTypes);
+
+        $userTypes = $this->container['userNotificationTypeModel']->getTypes();
+        $this->assertArrayHasKey(DiscordNotification::TYPE, $userTypes);
     }
 
     public function testNoWebhookMeansNoSend()
@@ -292,6 +297,8 @@ class DiscordNotificationTest extends Base
             DiscordNotification::META_USER_ID => '111222333444555666',
         ));
 
+        $this->container['userNotificationTypeModel']->saveSelectedTypes($userId, array(DiscordNotification::TYPE));
+
         $captured = null;
         $http->expects($this->once())->method('postJson')
             ->willReturnCallback(function ($url, $payload) use (&$captured) {
@@ -299,9 +306,8 @@ class DiscordNotificationTest extends Base
                 return '';
             });
 
-        $notification = new DiscordNotification($this->container);
-        $notification->notifyUser(
-            array('id' => $userId, 'username' => 'carol'),
+        $this->container['userNotificationModel']->sendUserNotification(
+            $userModel->getById($userId),
             \Kanboard\Model\CommentModel::EVENT_USER_MENTION,
             array(
                 'task' => array('id' => 7, 'project_id' => $projectId, 'project_name' => 'MP', 'title' => 'Task 7'),
@@ -311,6 +317,58 @@ class DiscordNotificationTest extends Base
 
         $this->assertStringContainsString('<@111222333444555666>', $captured['content']);
         $this->assertStringContainsString('💬', $captured['embeds'][0]['description']);
+    }
+
+    public function testMentionEventWithoutDiscordIdDoesNotSendUserCard()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'MNOID'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/9/z',
+        ));
+        $userId = $userModel->create(array('username' => 'nodc', 'name' => 'No Discord'));
+        $this->container['userNotificationTypeModel']->saveSelectedTypes($userId, array(DiscordNotification::TYPE));
+
+        $this->container['userNotificationModel']->sendUserNotification(
+            $userModel->getById($userId),
+            \Kanboard\Model\CommentModel::EVENT_USER_MENTION,
+            array(
+                'task' => array('id' => 9, 'project_id' => $projectId, 'project_name' => 'MNOID', 'title' => 'Task 9'),
+                'comment' => array('comment' => 'Hey @nodc look at this'),
+            )
+        );
+    }
+
+    public function testDiscordUserNotificationIgnoresNonMentionEvents()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'NM'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/9/z',
+        ));
+        $userId = $userModel->create(array('username' => 'nina', 'name' => 'Nina'));
+        $this->container['userMetadataModel']->save($userId, array(
+            DiscordNotification::META_USER_ID => '111222333444555667',
+        ));
+        $this->container['userNotificationTypeModel']->saveSelectedTypes($userId, array(DiscordNotification::TYPE));
+
+        $this->container['userNotificationModel']->sendUserNotification(
+            $userModel->getById($userId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 8, 'project_id' => $projectId, 'project_name' => 'NM', 'title' => 'Task 8'))
+        );
     }
 
     public function testOverdueFansOutPerTaskWithDistinctTitles()
@@ -433,6 +491,95 @@ class DiscordNotificationTest extends Base
             \Kanboard\Model\TaskModel::EVENT_CREATE,
             array('task' => array('id' => 1, 'project_id' => $projectId, 'project_name' => 'P', 'title' => 't', 'owner_id' => 0))
         );
+    }
+
+    public function testNonWebhookDiscordApiPathRejected()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'PAPI'));
+        // Valid host and API prefix, but not a webhook execution path.
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/v10/users/@me',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 1, 'project_id' => $projectId, 'project_name' => 'PAPI', 'title' => 't', 'owner_id' => 0))
+        );
+    }
+
+    public function testIncompleteDiscordWebhookPathRejected()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'PINC'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/123',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 1, 'project_id' => $projectId, 'project_name' => 'PINC', 'title' => 't', 'owner_id' => 0))
+        );
+    }
+
+    public function testDiscordWebhookSubresourceRejected()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'PSUB'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/123/token/messages/456',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 1, 'project_id' => $projectId, 'project_name' => 'PSUB', 'title' => 't', 'owner_id' => 0))
+        );
+    }
+
+    public function testVersionedDiscordWebhookPathAccepted()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'PV'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/v10/webhooks/1/x',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 1, 'project_id' => $projectId, 'project_name' => 'PV', 'title' => 't', 'owner_id' => 0))
+        );
+
+        $this->assertArrayHasKey('embeds', $captured);
     }
 
     public function testLongTitleTruncatedToDiscordLimit()
@@ -747,5 +894,398 @@ class DiscordNotificationTest extends Base
         );
 
         $this->assertArrayHasKey('embeds', $captured);
+    }
+
+    /**
+     * Comment mentioning a project member: the channel card must NOT ping the
+     * assignee (the mentioned member is pinged by the dedicated @mention path),
+     * yet the comment text must still be shown on the card.
+     */
+    public function testCommentMentioningMemberDoesNotPingAssignee()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectUserRoleModel = new ProjectUserRoleModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'CM'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        // Assignee (owner) has a Discord ID.
+        $assigneeId = $userModel->create(array('username' => 'boss', 'name' => 'Boss'));
+        $this->container['userMetadataModel']->save($assigneeId, array(
+            DiscordNotification::META_USER_ID => '100000000000000001',
+        ));
+
+        // Mentioned member of the project.
+        $memberId = $userModel->create(array('username' => 'zoe', 'name' => 'Zoe', 'notifications_enabled' => 1));
+        $projectUserRoleModel->addUser($projectId, $memberId, Role::PROJECT_MEMBER);
+        $this->container['userMetadataModel']->save($memberId, array(
+            DiscordNotification::META_USER_ID => '700000000000000007',
+        ));
+        $this->container['userNotificationTypeModel']->saveSelectedTypes($memberId, array(DiscordNotification::TYPE));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 7, 'project_id' => $projectId, 'project_name' => 'CM', 'title' => 'T', 'owner_id' => $assigneeId),
+                'comment' => array('comment' => 'Please review @zoe', 'user_id' => 999, 'task_id' => 7),
+            )
+        );
+
+        // Comment mentions a member -> assignee must NOT be pinged.
+        $this->assertArrayNotHasKey('content', $captured);
+        // But the comment content is still visible on the card.
+        $this->assertStringContainsString('Please review', $captured['embeds'][0]['description']);
+        $this->assertStringContainsString('💬', $captured['embeds'][0]['description']);
+    }
+
+    /**
+     * A project member without a valid Discord ID cannot receive a Discord
+     * @mention, so the project card must keep the assignee fallback.
+     */
+    public function testCommentMentioningMemberWithoutDiscordIdStillPingsAssignee()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectUserRoleModel = new ProjectUserRoleModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'CND'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $assigneeId = $userModel->create(array('username' => 'anchor', 'name' => 'Anchor'));
+        $this->container['userMetadataModel']->save($assigneeId, array(
+            DiscordNotification::META_USER_ID => '800000000000000008',
+        ));
+        $memberId = $userModel->create(array('username' => 'nomap', 'name' => 'No Map', 'notifications_enabled' => 1));
+        $projectUserRoleModel->addUser($projectId, $memberId, Role::PROJECT_MEMBER);
+        $this->container['userNotificationTypeModel']->saveSelectedTypes($memberId, array(DiscordNotification::TYPE));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 13, 'project_id' => $projectId, 'project_name' => 'CND', 'title' => 'T', 'owner_id' => $assigneeId),
+                'comment' => array('comment' => 'please check @nomap', 'user_id' => 999, 'task_id' => 13),
+            )
+        );
+
+        $this->assertArrayHasKey('content', $captured);
+        $this->assertStringContainsString('<@800000000000000008>', $captured['content']);
+    }
+
+    /**
+     * A project member who has not selected the Discord notification type cannot
+     * receive the dedicated Discord @mention path, so keep the assignee fallback.
+     */
+    public function testCommentMentioningMemberWithoutDiscordNotificationTypeStillPingsAssignee()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectUserRoleModel = new ProjectUserRoleModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'CNT'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $assigneeId = $userModel->create(array('username' => 'reserve', 'name' => 'Reserve'));
+        $this->container['userMetadataModel']->save($assigneeId, array(
+            DiscordNotification::META_USER_ID => '900000000000000009',
+        ));
+        $memberId = $userModel->create(array('username' => 'unselected', 'name' => 'Unselected', 'notifications_enabled' => 1));
+        $projectUserRoleModel->addUser($projectId, $memberId, Role::PROJECT_MEMBER);
+        $this->container['userMetadataModel']->save($memberId, array(
+            DiscordNotification::META_USER_ID => '900000000000000010',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 14, 'project_id' => $projectId, 'project_name' => 'CNT', 'title' => 'T', 'owner_id' => $assigneeId),
+                'comment' => array('comment' => 'please check @unselected', 'user_id' => 999, 'task_id' => 14),
+            )
+        );
+
+        $this->assertArrayHasKey('content', $captured);
+        $this->assertStringContainsString('<@900000000000000009>', $captured['content']);
+    }
+
+    /**
+     * Comment mentioning nobody (or nobody who is a project member): fall back
+     * to pinging the task assignee.
+     */
+    public function testCommentWithoutMentionPingsAssignee()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'CN'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $assigneeId = $userModel->create(array('username' => 'chief', 'name' => 'Chief'));
+        $this->container['userMetadataModel']->save($assigneeId, array(
+            DiscordNotification::META_USER_ID => '200000000000000002',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 8, 'project_id' => $projectId, 'project_name' => 'CN', 'title' => 'T', 'owner_id' => $assigneeId),
+                'comment' => array('comment' => 'No mention here', 'user_id' => 999, 'task_id' => 8),
+            )
+        );
+
+        // No mention in the comment -> ping the assignee.
+        $this->assertArrayHasKey('content', $captured);
+        $this->assertStringContainsString('<@200000000000000002>', $captured['content']);
+    }
+
+    /**
+     * A comment that mentions a username that is NOT a project member must not
+     * suppress the assignee ping (only real project members count).
+     */
+    public function testCommentMentioningNonMemberStillPingsAssignee()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'CNM'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $assigneeId = $userModel->create(array('username' => 'lead', 'name' => 'Lead'));
+        $this->container['userMetadataModel']->save($assigneeId, array(
+            DiscordNotification::META_USER_ID => '300000000000000003',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 9, 'project_id' => $projectId, 'project_name' => 'CNM', 'title' => 'T', 'owner_id' => $assigneeId),
+                'comment' => array('comment' => 'ping @ghost who is not a member', 'user_id' => 999, 'task_id' => 9),
+            )
+        );
+
+        // Mentioned user is not a project member -> assignee still pinged.
+        $this->assertArrayHasKey('content', $captured);
+        $this->assertStringContainsString('<@300000000000000003>', $captured['content']);
+    }
+
+    /**
+     * A comment mentioning a project member who disabled Kanboard notifications
+     * must not suppress the assignee ping, because core will not dispatch a
+     * dedicated @mention notification for that user.
+     */
+    public function testCommentMentioningNotificationDisabledMemberStillPingsAssignee()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectUserRoleModel = new ProjectUserRoleModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'CD'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $assigneeId = $userModel->create(array('username' => 'fallback', 'name' => 'Fallback'));
+        $this->container['userMetadataModel']->save($assigneeId, array(
+            DiscordNotification::META_USER_ID => '600000000000000006',
+        ));
+        $memberId = $userModel->create(array(
+            'username' => 'muted',
+            'name' => 'Muted',
+            'notifications_enabled' => 0,
+        ));
+        $projectUserRoleModel->addUser($projectId, $memberId, Role::PROJECT_MEMBER);
+        $this->container['userMetadataModel']->save($memberId, array(
+            DiscordNotification::META_USER_ID => '600000000000000007',
+        ));
+        $this->container['userNotificationTypeModel']->saveSelectedTypes($memberId, array(DiscordNotification::TYPE));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 12, 'project_id' => $projectId, 'project_name' => 'CD', 'title' => 'T', 'owner_id' => $assigneeId),
+                'comment' => array('comment' => 'please check @muted', 'user_id' => 999, 'task_id' => 12),
+            )
+        );
+
+        // Core will not send @mention to notification-disabled users -> keep assignee ping.
+        $this->assertArrayHasKey('content', $captured);
+        $this->assertStringContainsString('<@600000000000000006>', $captured['content']);
+    }
+
+    /**
+     * comment.update has no dedicated @mention path in Kanboard core, so even a
+     * comment that mentions a member must still ping the assignee on update (no
+     * suppression), otherwise the edit would notify nobody.
+     */
+    public function testCommentUpdateMentioningMemberStillPingsAssignee()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectUserRoleModel = new ProjectUserRoleModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'CU'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $assigneeId = $userModel->create(array('username' => 'mgr', 'name' => 'Mgr'));
+        $this->container['userMetadataModel']->save($assigneeId, array(
+            DiscordNotification::META_USER_ID => '400000000000000004',
+        ));
+        $memberId = $userModel->create(array('username' => 'yan', 'name' => 'Yan'));
+        $projectUserRoleModel->addUser($projectId, $memberId, Role::PROJECT_MEMBER);
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_UPDATE,
+            array(
+                'task' => array('id' => 10, 'project_id' => $projectId, 'project_name' => 'CU', 'title' => 'T', 'owner_id' => $assigneeId),
+                'comment' => array('comment' => 'edited @yan', 'user_id' => 999, 'task_id' => 10),
+            )
+        );
+
+        // Update event -> assignee is pinged regardless of the mention.
+        $this->assertArrayHasKey('content', $captured);
+        $this->assertStringContainsString('<@400000000000000004>', $captured['content']);
+    }
+
+    /**
+     * A comment whose ONLY mention is the author mentioning themselves must not
+     * suppress the assignee ping (core sends no self @mention notification).
+     */
+    public function testCommentSelfMentionStillPingsAssignee()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectUserRoleModel = new ProjectUserRoleModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'CS'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $assigneeId = $userModel->create(array('username' => 'own', 'name' => 'Own'));
+        $this->container['userMetadataModel']->save($assigneeId, array(
+            DiscordNotification::META_USER_ID => '500000000000000005',
+        ));
+        // The author is also a project member and mentions themselves.
+        $authorId = $userModel->create(array('username' => 'self', 'name' => 'Self'));
+        $projectUserRoleModel->addUser($projectId, $authorId, Role::PROJECT_MEMBER);
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 11, 'project_id' => $projectId, 'project_name' => 'CS', 'title' => 'T', 'owner_id' => $assigneeId),
+                'comment' => array('comment' => 'note to @self', 'user_id' => $authorId, 'task_id' => 11),
+            )
+        );
+
+        // Only a self-mention -> not treated as "mentions a member" -> assignee pinged.
+        $this->assertArrayHasKey('content', $captured);
+        $this->assertStringContainsString('<@500000000000000005>', $captured['content']);
     }
 }

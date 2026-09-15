@@ -14,6 +14,8 @@ return array(
         => '輸入你的數字型 Discord 使用者 ID，當你被指派任務或在留言中被提及時，Discord 通知會標註（tag）你。',
     'To find it: enable Developer Mode in Discord (Settings > Advanced), then right-click your name and choose "Copy User ID".'
         => '取得方式：在 Discord 開啟開發者模式（設定 > 進階），然後右鍵點你的名字選擇「複製使用者 ID」。',
+    'For comment @mentions, also enable the Discord notification type in your Kanboard notification settings.'
+        => '若要在留言 @提及時收到 Discord 標註，請同時在 Kanboard 通知設定中啟用 Discord 通知類型。',
     'Assignee' => '負責人',
     'Column' => '欄位',
     'Changed' => '變更欄位',
