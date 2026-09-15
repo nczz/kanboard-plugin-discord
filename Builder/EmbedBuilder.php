@@ -491,8 +491,8 @@ class EmbedBuilder extends Base
      * Resolve the configurable content-excerpt length.
      *
      * Precedence: per-project metadata > global application setting > default.
-     * A non-positive / non-numeric value falls back to the default.
-     *
+     * Empty values fall through to the next level. Non-numeric values fall back
+     * to the default. Explicit "0" hides free-text excerpts.
      * @access protected
      * @param  array $project
      * @return integer
@@ -501,20 +501,19 @@ class EmbedBuilder extends Base
     {
         $value = '';
 
-        // NOTE: MetadataModel::get() uses "?: default", so a stored "0" comes back
-        // as the (empty) default. We therefore detect an explicit "0" (= hide) via
-        // exists() before falling back.
         if (! empty($project['id'])) {
-            if ($this->projectMetadataModel->exists($project['id'], self::KEY_EXCERPT_LENGTH)) {
-                $raw = $this->projectMetadataModel->get($project['id'], self::KEY_EXCERPT_LENGTH, '');
-                // Empty string returned for a value that exists means it was "0".
-                $value = ($raw === '') ? '0' : (string) $raw;
+            $metadata = $this->projectMetadataModel->getAll($project['id']);
+            if (array_key_exists(self::KEY_EXCERPT_LENGTH, $metadata)) {
+                $value = (string) $metadata[self::KEY_EXCERPT_LENGTH];
             }
         }
 
         // Empty at project level -> fall back to the global application setting.
         if ($value === '') {
-            $value = (string) $this->configModel->get(self::KEY_EXCERPT_LENGTH, '');
+            $settings = $this->configModel->getAll();
+            if (array_key_exists(self::KEY_EXCERPT_LENGTH, $settings)) {
+                $value = (string) $settings[self::KEY_EXCERPT_LENGTH];
+            }
         }
 
         // Unset or non-numeric -> default. An explicit "0" means "hide excerpts".

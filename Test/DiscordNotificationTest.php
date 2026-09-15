@@ -166,6 +166,39 @@ class DiscordNotificationTest extends Base
         $this->assertLessThan(500, mb_strlen($captured['embeds'][0]['description']));
     }
 
+    public function testEmptyProjectExcerptLengthFallsBackToDefaultAndShowsComment()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'EXEMPTY'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 6, 'project_id' => $projectId, 'project_name' => 'EXEMPTY', 'title' => 't', 'owner_id' => 0),
+                'comment' => array('comment' => 'comment body must be visible', 'user_id' => 0, 'task_id' => 6),
+            )
+        );
+
+        $this->assertStringContainsString('💬', $captured['embeds'][0]['description']);
+        $this->assertStringContainsString('comment body must be visible', $captured['embeds'][0]['description']);
+    }
+
     public function testExcerptLengthConfigurablePerProject()
     {
         $this->loadPlugin();
