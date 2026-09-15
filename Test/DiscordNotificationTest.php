@@ -1229,10 +1229,11 @@ class DiscordNotificationTest extends Base
     }
 
     /**
-     * A project member without a valid Discord ID cannot receive a Discord
-     * @mention, so the project card must keep the assignee fallback.
+     * A real project-member @mention suppresses the assignee fallback even when
+     * that member has no Discord ID. The card is still sent, but without a
+     * Discord ping, because pinging the assignee would notify the wrong person.
      */
-    public function testCommentMentioningMemberWithoutDiscordIdStillPingsAssignee()
+    public function testCommentMentioningMemberWithoutDiscordIdSendsCardWithoutPing()
     {
         $this->loadPlugin();
         $http = $this->mockHttp();
@@ -1271,8 +1272,9 @@ class DiscordNotificationTest extends Base
             )
         );
 
-        $this->assertArrayHasKey('content', $captured);
-        $this->assertStringContainsString('<@800000000000000008>', $captured['content']);
+        $this->assertArrayNotHasKey('content', $captured);
+        $this->assertArrayNotHasKey('allowed_mentions', $captured);
+        $this->assertStringContainsString('please check', $captured['embeds'][0]['description']);
     }
 
     /**

@@ -123,8 +123,10 @@ Discord > Content excerpt length**:
 
 Now that user will be pinged in Discord when assigned to a task or mentioned in
 a comment. Comment @mentions ping the mentioned mapped Discord users on the
-comment card itself; when no mapped project member is mentioned, the card falls
-back to pinging the task assignee.
+comment card itself. If a comment mentions a project member who has no Discord
+User ID mapped, the card is still sent without a ping; it does not fall back to
+the task assignee. Only comments with no real project-member mention fall back
+to pinging the assignee.
 
 Updating on the server (git pull)
 ---------------------------------

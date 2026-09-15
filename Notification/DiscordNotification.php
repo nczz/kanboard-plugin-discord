@@ -265,10 +265,10 @@ class DiscordNotification extends Base implements NotificationInterface
      * Decide who to ping on the project-channel card.
      *
      * Priority for a NEW comment (comment.create): if the comment text mentions
-     * one or more mapped Discord users who are members of the project, those
-     * people are the intended beneficiaries. Ping them on the project comment
-     * card and do not also ping the assignee. Only when the comment does not
-     * mention a mapped project member do we fall back to the task assignee.
+     * one or more Kanboard project members, those people are the intended
+     * beneficiaries. Ping the mentioned members that have mapped Discord IDs. If
+     * none of the mentioned members have a Discord ID, send the comment card
+     * without a ping instead of falling back to the task assignee.
      *
      * This is intentionally different from regular task lifecycle events, where
      * the assignee is the person expected to act on the card.
@@ -283,10 +283,10 @@ class DiscordNotification extends Base implements NotificationInterface
         if ($eventName === CommentModel::EVENT_CREATE && ! empty($eventData['comment']['comment'])) {
             $projectId = (int) ($eventData['task']['project_id'] ?? 0);
             $authorId = (int) ($eventData['comment']['user_id'] ?? 0);
-            $mention = $this->getMentionsForComment($eventData['comment']['comment'], $projectId, $authorId);
+            $commentMentions = $this->getCommentMentions($eventData['comment']['comment'], $projectId, $authorId);
 
-            if ($mention !== '') {
-                return $mention;
+            if ($commentMentions['has_member_mention']) {
+                return $commentMentions['mentions'];
             }
         }
 
@@ -294,23 +294,23 @@ class DiscordNotification extends Base implements NotificationInterface
     }
 
     /**
-     * Build Discord mentions for mapped project members referenced in comment text.
+     * Resolve comment @mentions against Kanboard users and mapped Discord IDs.
      *
-     * The comment card should ping the person being asked for attention, not the
-     * current assignee. A valid Discord ID is the user's opt-in signal for this
-     * plugin-level ping; the project event filter controls whether comment cards
-     * are sent at all.
+     * A real Kanboard project-member mention suppresses the assignee fallback
+     * even when that user has no Discord ID mapped: in that case Discord receives
+     * the comment card without any ping, because pinging the assignee would alert
+     * the wrong person.
      *
      * @access protected
      * @param  string  $text
      * @param  integer $projectId
      * @param  integer $excludeUserId  User id to ignore (the comment author).
-     * @return string
+     * @return array{has_member_mention: bool, mentions: string}
      */
-    protected function getMentionsForComment($text, $projectId, $excludeUserId = 0)
+    protected function getCommentMentions($text, $projectId, $excludeUserId = 0)
     {
         if ($projectId <= 0 || $text === '' || ! preg_match_all('/@([^\s,!:?]+)/', $text, $matches)) {
-            return '';
+            return array('has_member_mention' => false, 'mentions' => '');
         }
 
         $usernames = array_map(function ($username) {
@@ -322,13 +322,14 @@ class DiscordNotification extends Base implements NotificationInterface
             ->in('username', array_unique($usernames))
             ->findAll();
 
+        $hasMemberMention = false;
         $mentions = array();
-
         foreach ($users as $user) {
             $userId = (int) $user['id'];
             if ($userId === (int) $excludeUserId || ! $this->projectPermissionModel->isMember($projectId, $userId)) {
                 continue;
             }
+            $hasMemberMention = true;
 
             $mention = $this->buildMention($userId);
             if ($mention !== '') {
@@ -336,7 +337,7 @@ class DiscordNotification extends Base implements NotificationInterface
             }
         }
 
-        return implode(' ', array_values($mentions));
+        return array('has_member_mention' => $hasMemberMention, 'mentions' => implode(' ', array_values($mentions)));
     }
 
     /**
