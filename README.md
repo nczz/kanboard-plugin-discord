@@ -17,11 +17,13 @@ Features
 --------
 
 - Per-project routing: each project posts to its own Discord channel webhook.
+- Per-project event filtering: choose which Kanboard event groups should be sent
+  to Discord so the channel stays focused on meaningful signals.
 - Rich embed cards with event-specific colors, the task link, assignee and column.
-- Discord mentions for the assignee (on project events) and for the mentioned
-  user (on @mention events).
-- Comment @mentions avoid double-pinging the assignee when Kanboard dispatches a
-  dedicated mention notification for the mentioned project member.
+- Discord mentions for the assignee on task lifecycle events.
+- Comment @mentions ping the mapped Discord users being mentioned on the comment
+  card itself, not the task assignee.
+- Task description @mentions use Kanboard's dedicated user notification path.
 - No external dependencies: uses Kanboard's built-in HTTP client.
 - SSRF protection: only official Discord webhook hosts over HTTPS are accepted,
   and private-network URLs are blocked (unless `WEBHOOK_ALLOW_PRIVATE_NETWORKS`
@@ -70,6 +72,21 @@ Configuration
 To send several projects to the same channel, paste the same webhook URL into
 each project.
 
+### Event filtering
+
+Under **Settings > Integrations > Discord > Discord notification events**, choose
+which event groups should be sent to Discord:
+
+- Task lifecycle: create, update/move/assign, close/reopen, overdue.
+- Comments: create, update, delete.
+- Subtasks: create, update, delete.
+- Files and links.
+- Task description @mentions.
+
+Existing projects remain backward-compatible: until the event form is saved,
+all supported events are treated as enabled. After saving, only checked events
+are sent.
+
 ### Card layout and content length
 
 Each notification card is designed to convey the **status** completely while
@@ -96,12 +113,13 @@ Discord > Content excerpt length**:
 2. In Kanboard: go to **My profile > Integrations > Discord**, paste the numeric
    Discord User ID and save.
 3. In Kanboard: go to **My profile > Notifications** and enable the **Discord**
-   notification type. This lets Kanboard's dedicated @mention path call the
-   plugin for mentioned users.
+   notification type if you want task-description @mentions to use Kanboard's
+   dedicated user notification path.
 
 Now that user will be pinged in Discord when assigned to a task or mentioned in
-a comment. Comment @mentions suppress the assignee ping only when the mentioned
-user can receive that dedicated Discord mention notification.
+a comment. Comment @mentions ping the mentioned mapped Discord users on the
+comment card itself; when no mapped project member is mentioned, the card falls
+back to pinging the task assignee.
 
 Updating on the server (git pull)
 ---------------------------------

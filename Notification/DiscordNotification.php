@@ -5,6 +5,9 @@ namespace Kanboard\Plugin\Discord\Notification;
 use Kanboard\Core\Base;
 use Kanboard\Core\Notification\NotificationInterface;
 use Kanboard\Model\CommentModel;
+use Kanboard\Model\SubtaskModel;
+use Kanboard\Model\TaskFileModel;
+use Kanboard\Model\TaskLinkModel;
 use Kanboard\Model\TaskModel;
 use Kanboard\Plugin\Discord\Builder\EmbedBuilder;
 
@@ -14,10 +17,13 @@ use Kanboard\Plugin\Discord\Builder\EmbedBuilder;
  * Sends Kanboard events to a per-project Discord channel via an Incoming Webhook.
  *
  * Two delivery paths (see Kanboard\Job\NotificationJob):
- *   - notifyProject(): fired for regular project events. Mentions the task
- *     assignee's mapped Discord user (if any).
- *   - notifyUser():    fired only for "@mention" events, once per mentioned user.
- *     Sends to the project webhook and pings that specific user's Discord ID.
+ *   - notifyProject(): fired for regular project events. For task lifecycle
+ *     cards, mentions the assignee's mapped Discord user (if any). For new
+ *     comments with @mentions, mentions the mapped project members referenced in
+ *     the comment instead of the assignee.
+ *   - notifyUser(): fired for task-description "@mention" events once per
+ *     mentioned user. Comment @mentions are handled by notifyProject() to avoid
+ *     duplicate Discord cards.
  *
  * Sending is gated by the presence of a webhook URL in the project metadata,
  * so it is inert for projects that have not configured Discord.
@@ -42,6 +48,76 @@ class DiscordNotification extends Base implements NotificationInterface
     const META_USER_ID = 'discord_user_id';
 
     /**
+     * Project metadata prefix for per-event Discord delivery toggles.
+     */
+    const META_EVENT_PREFIX = 'discord_event_';
+
+    /**
+     * Events exposed in the project Discord settings.
+     *
+     * @access public
+     * @return array
+     */
+    public static function getEventGroups()
+    {
+        return array(
+            t('Tasks') => array(
+                'task_create' => t('Task created'),
+                'task_update' => t('Task updated, moved, or assigned'),
+                'task_close_open' => t('Task closed or reopened'),
+                'task_overdue' => t('Task overdue'),
+            ),
+            t('Comments') => array(
+                'comment_create' => t('Comment created'),
+                'comment_update' => t('Comment updated'),
+                'comment_delete' => t('Comment deleted'),
+            ),
+            t('Subtasks') => array(
+                'subtask_create' => t('Subtask created'),
+                'subtask_update' => t('Subtask updated'),
+                'subtask_delete' => t('Subtask deleted'),
+            ),
+            t('Files and links') => array(
+                'file_create' => t('File attached'),
+                'file_delete' => t('File removed'),
+                'task_link' => t('Task link changed'),
+            ),
+            t('Mentions') => array(
+                'mention' => t('Task description @mentions'),
+            ),
+        );
+    }
+
+    /**
+     * Build project metadata key for an event-toggle option.
+     *
+     * @access public
+     * @param  string $key
+     * @return string
+     */
+    public static function getEventMetadataKey($key)
+    {
+        return self::META_EVENT_PREFIX.$key;
+    }
+
+    /**
+     * Flat list of event-toggle keys.
+     *
+     * @access protected
+     * @return string[]
+     */
+    protected static function getEventKeys()
+    {
+        $keys = array();
+
+        foreach (self::getEventGroups() as $options) {
+            $keys = array_merge($keys, array_keys($options));
+        }
+
+        return $keys;
+    }
+
+    /**
      * Reached for Kanboard user-notification deliveries. This plugin only sends
      * Discord user pings for explicit @mention events; regular user
      * notifications are intentionally handled by notifyProject() so the project
@@ -53,7 +129,14 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     public function notifyUser(array $user, $eventName, array $eventData)
     {
-        if (! in_array($eventName, array(TaskModel::EVENT_USER_MENTION, CommentModel::EVENT_USER_MENTION), true)) {
+        if ($eventName === CommentModel::EVENT_USER_MENTION) {
+            // Comment mentions are pinged on the project comment card itself so
+            // the channel gets one complete card: who commented, content, and
+            // the directly mentioned people. Avoid a second duplicate card.
+            return;
+        }
+
+        if ($eventName !== TaskModel::EVENT_USER_MENTION) {
             return;
         }
 
@@ -62,6 +145,11 @@ class DiscordNotification extends Base implements NotificationInterface
         }
 
         $projectId = (int) $eventData['task']['project_id'];
+
+        if (! $this->isEventEnabled($projectId, $eventName)) {
+            return;
+        }
+
         $webhook = $this->getWebhookUrl($projectId);
 
         if ($webhook === '') {
@@ -92,12 +180,15 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     public function notifyProject(array $project, $eventName, array $eventData)
     {
+        if (! $this->isEventEnabled($project['id'], $eventName)) {
+            return;
+        }
+
         $webhook = $this->getWebhookUrl($project['id']);
 
         if ($webhook === '') {
             return;
         }
-
         // EVENT_OVERDUE carries a list of tasks instead of a single task.
         if ($eventName === TaskModel::EVENT_OVERDUE && ! empty($eventData['tasks'])) {
             foreach ($eventData['tasks'] as $task) {
@@ -125,18 +216,13 @@ class DiscordNotification extends Base implements NotificationInterface
      * Decide who to ping on the project-channel card.
      *
      * Priority for a NEW comment (comment.create): if the comment text mentions
-     * a project member who can receive a Discord @mention via Kanboard's user
-     * notification path, Kanboard fires notifyUser() for that user on
-     * comment.create, so this channel card must NOT additionally ping the task
-     * assignee (which would ping the wrong person). Only when no Discord
-     * @mention can be dispatched do we fall back to the task assignee.
+     * one or more mapped Discord users who are members of the project, those
+     * people are the intended beneficiaries. Ping them on the project comment
+     * card and do not also ping the assignee. Only when the comment does not
+     * mention a mapped project member do we fall back to the task assignee.
      *
-     * NOTE: this suppression applies to comment.create ONLY. Kanboard does not
-     * dispatch the @mention path for comment.update (see CommentEventJob), so an
-     * edited comment has no dedicated notification to hand the mentioned users
-     * off to. For updates (and every other event) we therefore keep the existing
-     * behaviour and ping the task assignee, so the notification always reaches
-     * someone.
+     * This is intentionally different from regular task lifecycle events, where
+     * the assignee is the person expected to act on the card.
      *
      * @access protected
      * @param  string $eventName
@@ -147,15 +233,11 @@ class DiscordNotification extends Base implements NotificationInterface
     {
         if ($eventName === CommentModel::EVENT_CREATE && ! empty($eventData['comment']['comment'])) {
             $projectId = (int) ($eventData['task']['project_id'] ?? 0);
-            // Kanboard never sends an @mention to the comment author (even a
-            // self-mention), so exclude them here too; otherwise a self-mention
-            // would suppress the assignee ping and the comment would notify nobody.
             $authorId = (int) ($eventData['comment']['user_id'] ?? 0);
+            $mention = $this->getMentionsForComment($eventData['comment']['comment'], $projectId, $authorId);
 
-            // Comment mentions another member who can receive the dedicated
-            // Discord @mention notification; do not ping the assignee.
-            if ($this->commentMentionsMember($eventData['comment']['comment'], $projectId, $authorId)) {
-                return '';
+            if ($mention !== '') {
+                return $mention;
             }
         }
 
@@ -163,21 +245,23 @@ class DiscordNotification extends Base implements NotificationInterface
     }
 
     /**
-     * Mirrors the conditions that make this plugin's Kanboard user-notification
-     * path deliver a real Discord ping: scan "@username" tokens, keep only
-     * notification-enabled users, ignore the comment author, confirm project
-     * membership, selected Discord notification type, and a valid Discord ID.
+     * Build Discord mentions for mapped project members referenced in comment text.
+     *
+     * The comment card should ping the person being asked for attention, not the
+     * current assignee. A valid Discord ID is the user's opt-in signal for this
+     * plugin-level ping; the project event filter controls whether comment cards
+     * are sent at all.
      *
      * @access protected
      * @param  string  $text
      * @param  integer $projectId
      * @param  integer $excludeUserId  User id to ignore (the comment author).
-     * @return boolean
+     * @return string
      */
-    protected function commentMentionsMember($text, $projectId, $excludeUserId = 0)
+    protected function getMentionsForComment($text, $projectId, $excludeUserId = 0)
     {
         if ($projectId <= 0 || $text === '' || ! preg_match_all('/@([^\s,!:?]+)/', $text, $matches)) {
-            return false;
+            return '';
         }
 
         $usernames = array_map(function ($username) {
@@ -187,33 +271,113 @@ class DiscordNotification extends Base implements NotificationInterface
         $users = $this->db->table(\Kanboard\Model\UserModel::TABLE)
             ->columns('id')
             ->in('username', array_unique($usernames))
-            ->eq('notifications_enabled', 1)
             ->findAll();
 
+        $mentions = array();
+
         foreach ($users as $user) {
-            if ((int) $user['id'] === (int) $excludeUserId) {
+            $userId = (int) $user['id'];
+            if ($userId === (int) $excludeUserId || ! $this->projectPermissionModel->isMember($projectId, $userId)) {
                 continue;
             }
-            if ($this->projectPermissionModel->isMember($projectId, $user['id'])
-                && $this->userCanReceiveDiscordMention($user['id'])) {
-                return true;
+
+            $mention = $this->buildMention($userId);
+            if ($mention !== '') {
+                $mentions[$userId] = $mention;
             }
         }
 
-        return false;
+        return implode(' ', array_values($mentions));
     }
 
     /**
-     * Whether Kanboard can route a dedicated Discord @mention notification to a user.
+     * Whether a Discord event is enabled for a project.
+     *
+     * Projects created before event filtering have no event metadata. That state
+     * means "all events enabled" for backward compatibility. Once any event
+     * toggle is saved, only explicit "1" values are delivered.
      *
      * @access protected
-     * @param  integer $userId
+     * @param  integer $projectId
+     * @param  string  $eventName
      * @return boolean
      */
-    protected function userCanReceiveDiscordMention($userId)
+    protected function isEventEnabled($projectId, $eventName)
     {
-        return in_array(self::TYPE, $this->userNotificationTypeModel->getSelectedTypes($userId), true)
-            && $this->buildMention($userId) !== '';
+        $metadata = $this->projectMetadataModel->getAll($projectId);
+        $eventKey = $this->getEventKey($eventName);
+        $hasEventConfig = false;
+
+        foreach (self::getEventKeys() as $key) {
+            if (array_key_exists(self::getEventMetadataKey($key), $metadata)) {
+                $hasEventConfig = true;
+                break;
+            }
+        }
+
+        if (! $hasEventConfig) {
+            return true;
+        }
+
+        if ($eventKey === '') {
+            return false;
+        }
+
+        return isset($metadata[self::getEventMetadataKey($eventKey)])
+            && (string) $metadata[self::getEventMetadataKey($eventKey)] === '1';
+    }
+
+    /**
+     * Map Kanboard event names to project-level Discord event-toggle keys.
+     *
+     * @access protected
+     * @param  string $eventName
+     * @return string
+     */
+    protected function getEventKey($eventName)
+    {
+        switch ($eventName) {
+            case TaskModel::EVENT_CREATE:
+                return 'task_create';
+            case TaskModel::EVENT_UPDATE:
+            case TaskModel::EVENT_CREATE_UPDATE:
+            case TaskModel::EVENT_ASSIGNEE_CHANGE:
+            case TaskModel::EVENT_MOVE_PROJECT:
+            case TaskModel::EVENT_MOVE_COLUMN:
+            case TaskModel::EVENT_MOVE_POSITION:
+            case TaskModel::EVENT_MOVE_SWIMLANE:
+                return 'task_update';
+            case TaskModel::EVENT_CLOSE:
+            case TaskModel::EVENT_OPEN:
+                return 'task_close_open';
+            case TaskModel::EVENT_OVERDUE:
+                return 'task_overdue';
+            case CommentModel::EVENT_CREATE:
+                return 'comment_create';
+            case CommentModel::EVENT_UPDATE:
+                return 'comment_update';
+            case CommentModel::EVENT_DELETE:
+                return 'comment_delete';
+            case SubtaskModel::EVENT_CREATE:
+                return 'subtask_create';
+            case SubtaskModel::EVENT_UPDATE:
+            case SubtaskModel::EVENT_CREATE_UPDATE:
+                return 'subtask_update';
+            case SubtaskModel::EVENT_DELETE:
+                return 'subtask_delete';
+            case TaskFileModel::EVENT_CREATE:
+                return 'file_create';
+            case TaskFileModel::EVENT_DESTROY:
+                return 'file_delete';
+            case TaskLinkModel::EVENT_CREATE_UPDATE:
+            case TaskLinkModel::EVENT_DELETE:
+                return 'task_link';
+            case TaskModel::EVENT_USER_MENTION:
+            case CommentModel::EVENT_USER_MENTION:
+                return 'mention';
+            default:
+                return '';
+        }
     }
 
     /**

@@ -1,5 +1,18 @@
 <div class="panel">
     <h3><?= t('Discord') ?></h3>
+    <?php
+        $discordEventGroups = \Kanboard\Plugin\Discord\Notification\DiscordNotification::getEventGroups();
+        $hasDiscordEventConfig = false;
+        foreach ($discordEventGroups as $discordEventOptions) {
+            foreach (array_keys($discordEventOptions) as $discordEventKey) {
+                if (array_key_exists(\Kanboard\Plugin\Discord\Notification\DiscordNotification::getEventMetadataKey($discordEventKey), $values)) {
+                    $hasDiscordEventConfig = true;
+                    break 2;
+                }
+            }
+        }
+    ?>
+
 
     <?= $this->form->label(t('Discord Webhook URL'), 'discord_webhook_url') ?>
     <?= $this->form->text('discord_webhook_url', $values, array(), array('placeholder="https://discord.com/api/webhooks/..."')) ?>
@@ -13,6 +26,25 @@
     <p class="form-help">
         <?= t('Maximum number of characters shown from task descriptions, comments and subtasks. The status line (who did what) is always shown in full. Leave empty for the default (280). Set 0 to hide content excerpts entirely.') ?>
     </p>
+
+    <fieldset>
+        <legend><?= t('Discord notification events') ?></legend>
+        <p class="form-help">
+            <?= t('Choose which Kanboard events should be sent to Discord. Existing projects default to all events until this form is saved.') ?>
+        </p>
+
+        <?php foreach ($discordEventGroups as $discordEventGroup => $discordEventOptions): ?>
+            <h4><?= $this->text->e($discordEventGroup) ?></h4>
+            <?php foreach ($discordEventOptions as $discordEventKey => $discordEventLabel): ?>
+                <?php
+                    $discordEventMetadataKey = \Kanboard\Plugin\Discord\Notification\DiscordNotification::getEventMetadataKey($discordEventKey);
+                    $discordEventChecked = ! $hasDiscordEventConfig || (isset($values[$discordEventMetadataKey]) && (string) $values[$discordEventMetadataKey] === '1');
+                ?>
+                <input type="hidden" name="<?= $discordEventMetadataKey ?>" value="0">
+                <?= $this->form->checkbox($discordEventMetadataKey, $discordEventLabel, '1', $discordEventChecked) ?><br>
+            <?php endforeach ?>
+        <?php endforeach ?>
+    </fieldset>
 
     <div class="form-actions">
         <button type="submit" class="btn btn-blue"><?= t('Save') ?></button>
