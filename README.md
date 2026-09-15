@@ -77,15 +77,20 @@ each project.
 Under **Settings > Integrations > Discord > Discord notification events**, choose
 which event groups should be sent to Discord:
 
-- Task lifecycle: create, update/move/assign, close/reopen, overdue.
+- Tasks: create, update, assignee change, close, reopen, overdue.
+- Task moves: project, column, column position, swimlane. These are unchecked
+  by default because board drag/reorder activity is usually noisy.
 - Comments: create, update, delete.
 - Subtasks: create, update, delete.
-- Files and links.
+- Files: attach, remove.
+- Internal links: create/update, remove.
 - Task description @mentions.
 
-Existing projects remain backward-compatible: until the event form is saved,
-all supported events are treated as enabled. After saving, only checked events
-are sent.
+Most supported events are enabled by default. Task move events are disabled by
+default until explicitly checked. Older coarse settings for close/open, assignee
+changes, internal links and task description mentions are still honored where
+they map cleanly to the split events; move events remain off unless their new
+individual move toggles are checked.
 
 ### Card layout and content length
 

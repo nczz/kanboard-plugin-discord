@@ -112,6 +112,118 @@ class DiscordNotificationTest extends Base
         $this->assertArrayHasKey('embeds', $captured);
     }
 
+    public function testMoveEventsAreDisabledByDefault()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'move-default-off'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_MOVE_COLUMN,
+            array('task' => array(
+                'id' => 4,
+                'project_id' => $projectId,
+                'project_name' => 'move-default-off',
+                'title' => 'x',
+                'column_title' => 'Done',
+                'owner_id' => 0,
+            ))
+        );
+    }
+
+    public function testMoveEventFilterAllowsExplicitlyEnabledMove()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'move-enabled'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            DiscordNotification::getEventMetadataKey('task_move_column') => '1',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_MOVE_COLUMN,
+            array('task' => array(
+                'id' => 5,
+                'project_id' => $projectId,
+                'project_name' => 'move-enabled',
+                'title' => 'x',
+                'column_title' => 'Done',
+                'owner_id' => 0,
+            ))
+        );
+
+        $this->assertArrayHasKey('embeds', $captured);
+    }
+
+    public function testLegacyTaskUpdateSettingDoesNotEnableSplitMoveEvents()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'legacy-move-off'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            DiscordNotification::getEventMetadataKey('task_update') => '1',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_MOVE_COLUMN,
+            array('task' => array(
+                'id' => 6,
+                'project_id' => $projectId,
+                'project_name' => 'legacy-move-off',
+                'title' => 'x',
+                'column_title' => 'Done',
+                'owner_id' => 0,
+            ))
+        );
+    }
+
+    public function testLegacyCloseOpenSettingStillControlsSplitClose()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'legacy-close-off'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            DiscordNotification::getEventMetadataKey('task_close_open') => '0',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CLOSE,
+            array('task' => array('id' => 7, 'project_id' => $projectId, 'project_name' => 'legacy-close-off', 'title' => 'x', 'owner_id' => 0))
+        );
+    }
+
     public function testEventFilterBlocksOverdueFanout()
     {
         $this->loadPlugin();
@@ -968,6 +1080,7 @@ class DiscordNotificationTest extends Base
         $projectId = $projectModel->create(array('name' => 'ENT'));
         $this->container['projectMetadataModel']->save($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            DiscordNotification::getEventMetadataKey('task_move_column') => '1',
         ));
 
         $captured = null;

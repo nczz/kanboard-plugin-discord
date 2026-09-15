@@ -2,15 +2,6 @@
     <h3><?= t('Discord') ?></h3>
     <?php
         $discordEventGroups = \Kanboard\Plugin\Discord\Notification\DiscordNotification::getEventGroups();
-        $hasDiscordEventConfig = false;
-        foreach ($discordEventGroups as $discordEventOptions) {
-            foreach (array_keys($discordEventOptions) as $discordEventKey) {
-                if (array_key_exists(\Kanboard\Plugin\Discord\Notification\DiscordNotification::getEventMetadataKey($discordEventKey), $values)) {
-                    $hasDiscordEventConfig = true;
-                    break 2;
-                }
-            }
-        }
     ?>
 
 
@@ -30,7 +21,7 @@
     <fieldset>
         <legend><?= t('Discord notification events') ?></legend>
         <p class="form-help">
-            <?= t('Choose which Kanboard events should be sent to Discord. Existing projects default to all events until this form is saved.') ?>
+            <?= t('Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.') ?>
         </p>
 
         <?php foreach ($discordEventGroups as $discordEventGroup => $discordEventOptions): ?>
@@ -38,7 +29,7 @@
             <?php foreach ($discordEventOptions as $discordEventKey => $discordEventLabel): ?>
                 <?php
                     $discordEventMetadataKey = \Kanboard\Plugin\Discord\Notification\DiscordNotification::getEventMetadataKey($discordEventKey);
-                    $discordEventChecked = ! $hasDiscordEventConfig || (isset($values[$discordEventMetadataKey]) && (string) $values[$discordEventMetadataKey] === '1');
+                    $discordEventChecked = \Kanboard\Plugin\Discord\Notification\DiscordNotification::isEventMetadataEnabled($discordEventKey, $values);
                 ?>
                 <input type="hidden" name="<?= $discordEventMetadataKey ?>" value="0">
                 <?= $this->form->checkbox($discordEventMetadataKey, $discordEventLabel, '1', $discordEventChecked) ?><br>

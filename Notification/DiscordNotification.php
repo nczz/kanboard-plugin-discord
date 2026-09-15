@@ -63,9 +63,17 @@ class DiscordNotification extends Base implements NotificationInterface
         return array(
             t('Tasks') => array(
                 'task_create' => t('Task created'),
-                'task_update' => t('Task updated, moved, or assigned'),
-                'task_close_open' => t('Task closed or reopened'),
+                'task_update' => t('Task updated'),
+                'task_assignee_change' => t('Task assignee changed'),
+                'task_close' => t('Task closed'),
+                'task_open' => t('Task reopened'),
                 'task_overdue' => t('Task overdue'),
+            ),
+            t('Task moves') => array(
+                'task_move_project' => t('Task moved to another project'),
+                'task_move_column' => t('Task moved to another column'),
+                'task_move_position' => t('Task reordered in a column'),
+                'task_move_swimlane' => t('Task moved to another swimlane'),
             ),
             t('Comments') => array(
                 'comment_create' => t('Comment created'),
@@ -77,13 +85,16 @@ class DiscordNotification extends Base implements NotificationInterface
                 'subtask_update' => t('Subtask updated'),
                 'subtask_delete' => t('Subtask deleted'),
             ),
-            t('Files and links') => array(
+            t('Files') => array(
                 'file_create' => t('File attached'),
                 'file_delete' => t('File removed'),
-                'task_link' => t('Task link changed'),
+            ),
+            t('Internal links') => array(
+                'task_link_create_update' => t('Task internal link created or updated'),
+                'task_link_delete' => t('Task internal link removed'),
             ),
             t('Mentions') => array(
-                'mention' => t('Task description @mentions'),
+                'task_mention' => t('Task description @mentions'),
             ),
         );
     }
@@ -98,6 +109,44 @@ class DiscordNotification extends Base implements NotificationInterface
     public static function getEventMetadataKey($key)
     {
         return self::META_EVENT_PREFIX.$key;
+    }
+
+    /**
+     * Whether an event-toggle option is enabled when no metadata has been saved.
+     *
+     * @access public
+     * @param  string $key
+     * @return boolean
+     */
+    public static function isEventDefaultEnabled($key)
+    {
+        return strpos($key, 'task_move_') !== 0;
+    }
+
+    /**
+     * Resolve a toggle value from project metadata for templates and delivery.
+     *
+     * @access public
+     * @param  string $key
+     * @param  array  $metadata
+     * @return boolean
+     */
+    public static function isEventMetadataEnabled($key, array $metadata)
+    {
+        $metadataKey = self::getEventMetadataKey($key);
+        if (array_key_exists($metadataKey, $metadata)) {
+            return (string) $metadata[$metadataKey] === '1';
+        }
+
+        $legacyKey = self::getLegacyEventKey($key);
+        if ($legacyKey !== '') {
+            $legacyMetadataKey = self::getEventMetadataKey($legacyKey);
+            if (array_key_exists($legacyMetadataKey, $metadata)) {
+                return (string) $metadata[$legacyMetadataKey] === '1';
+            }
+        }
+
+        return self::isEventDefaultEnabled($key);
     }
 
     /**
@@ -293,9 +342,10 @@ class DiscordNotification extends Base implements NotificationInterface
     /**
      * Whether a Discord event is enabled for a project.
      *
-     * Projects created before event filtering have no event metadata. That state
-     * means "all events enabled" for backward compatibility. Once any event
-     * toggle is saved, only explicit "1" values are delivered.
+     * Events default to enabled except task move events, which are deliberately
+     * quiet by default because board drag/reorder activity is usually noisy.
+     * Split keys can inherit old coarse metadata where doing so preserves user
+     * intent without re-enabling moves.
      *
      * @access protected
      * @param  integer $projectId
@@ -304,27 +354,13 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     protected function isEventEnabled($projectId, $eventName)
     {
-        $metadata = $this->projectMetadataModel->getAll($projectId);
         $eventKey = $this->getEventKey($eventName);
-        $hasEventConfig = false;
-
-        foreach (self::getEventKeys() as $key) {
-            if (array_key_exists(self::getEventMetadataKey($key), $metadata)) {
-                $hasEventConfig = true;
-                break;
-            }
-        }
-
-        if (! $hasEventConfig) {
-            return true;
-        }
 
         if ($eventKey === '') {
             return false;
         }
 
-        return isset($metadata[self::getEventMetadataKey($eventKey)])
-            && (string) $metadata[self::getEventMetadataKey($eventKey)] === '1';
+        return self::isEventMetadataEnabled($eventKey, $this->projectMetadataModel->getAll($projectId));
     }
 
     /**
@@ -341,15 +377,21 @@ class DiscordNotification extends Base implements NotificationInterface
                 return 'task_create';
             case TaskModel::EVENT_UPDATE:
             case TaskModel::EVENT_CREATE_UPDATE:
-            case TaskModel::EVENT_ASSIGNEE_CHANGE:
-            case TaskModel::EVENT_MOVE_PROJECT:
-            case TaskModel::EVENT_MOVE_COLUMN:
-            case TaskModel::EVENT_MOVE_POSITION:
-            case TaskModel::EVENT_MOVE_SWIMLANE:
                 return 'task_update';
+            case TaskModel::EVENT_ASSIGNEE_CHANGE:
+                return 'task_assignee_change';
+            case TaskModel::EVENT_MOVE_PROJECT:
+                return 'task_move_project';
+            case TaskModel::EVENT_MOVE_COLUMN:
+                return 'task_move_column';
+            case TaskModel::EVENT_MOVE_POSITION:
+                return 'task_move_position';
+            case TaskModel::EVENT_MOVE_SWIMLANE:
+                return 'task_move_swimlane';
             case TaskModel::EVENT_CLOSE:
+                return 'task_close';
             case TaskModel::EVENT_OPEN:
-                return 'task_close_open';
+                return 'task_open';
             case TaskModel::EVENT_OVERDUE:
                 return 'task_overdue';
             case CommentModel::EVENT_CREATE:
@@ -370,10 +412,38 @@ class DiscordNotification extends Base implements NotificationInterface
             case TaskFileModel::EVENT_DESTROY:
                 return 'file_delete';
             case TaskLinkModel::EVENT_CREATE_UPDATE:
+                return 'task_link_create_update';
             case TaskLinkModel::EVENT_DELETE:
-                return 'task_link';
+                return 'task_link_delete';
             case TaskModel::EVENT_USER_MENTION:
+                return 'task_mention';
             case CommentModel::EVENT_USER_MENTION:
+                return 'comment_mention';
+            default:
+                return '';
+        }
+    }
+
+    /**
+     * Map split event-toggle keys back to the coarse keys used by earlier
+     * plugin versions.
+     *
+     * @access protected
+     * @param  string $eventKey
+     * @return string
+     */
+    protected static function getLegacyEventKey($eventKey)
+    {
+        switch ($eventKey) {
+            case 'task_assignee_change':
+                return 'task_update';
+            case 'task_close':
+            case 'task_open':
+                return 'task_close_open';
+            case 'task_link_create_update':
+            case 'task_link_delete':
+                return 'task_link';
+            case 'task_mention':
                 return 'mention';
             default:
                 return '';
