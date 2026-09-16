@@ -4,6 +4,7 @@ namespace Kanboard\Plugin\Discord\Notification;
 
 use Kanboard\Core\Base;
 use Kanboard\Core\Notification\NotificationInterface;
+use Kanboard\Core\Translator;
 use Kanboard\Model\CommentModel;
 use Kanboard\Model\SubtaskModel;
 use Kanboard\Model\TaskFileModel;
@@ -16,14 +17,16 @@ use Kanboard\Plugin\Discord\Builder\EmbedBuilder;
  *
  * Sends Kanboard events to a per-project Discord channel via an Incoming Webhook.
  *
- * Two delivery paths (see Kanboard\Job\NotificationJob):
+ * Two delivery paths (see Kanboard\Job\NotificationJob and
+ * Kanboard\Console\TaskOverdueNotificationCommand):
  *   - notifyProject(): fired for regular project events. For task lifecycle
  *     cards, mentions the assignee's mapped Discord user (if any). For new
  *     comments with @mentions, mentions the mapped project members referenced in
  *     the comment instead of the assignee.
  *   - notifyUser(): fired for task-description "@mention" events once per
- *     mentioned user. Comment @mentions are handled by notifyProject() to avoid
- *     duplicate Discord cards.
+ *     mentioned user, and for overdue task batches because Kanboard core sends
+ *     overdue notifications only through the user-notification path. Comment
+ *     @mentions are handled by notifyProject() to avoid duplicate Discord cards.
  *
  * Sending is gated by the presence of a webhook URL in the project metadata,
  * so it is inert for projects that have not configured Discord.
@@ -51,6 +54,15 @@ class DiscordNotification extends Base implements NotificationInterface
      * Project metadata prefix for per-event Discord delivery toggles.
      */
     const META_EVENT_PREFIX = 'discord_event_';
+
+    /**
+     * Per-process overdue de-duplication. Kanboard core sends overdue
+     * notifications through the user-notification path, once per recipient; the
+     * Discord project channel must still receive only one card per overdue task.
+     *
+     * @var array
+     */
+    protected $sentOverdueTaskKeys = array();
 
     /**
      * Events exposed in the project Discord settings.
@@ -167,10 +179,10 @@ class DiscordNotification extends Base implements NotificationInterface
     }
 
     /**
-     * Reached for Kanboard user-notification deliveries. This plugin only sends
-     * Discord user pings for explicit @mention events; regular user
-     * notifications are intentionally handled by notifyProject() so the project
-     * channel receives one card and, when appropriate, one assignee ping.
+     * Reached for Kanboard user-notification deliveries. This plugin sends
+     * Discord user pings for explicit task-description @mention events and
+     * bridges core overdue batches into the project webhook. Regular user
+     * notifications are intentionally handled by notifyProject().
      * @access public
      * @param  array  $user
      * @param  string $eventName
@@ -182,6 +194,11 @@ class DiscordNotification extends Base implements NotificationInterface
             // Comment mentions are pinged on the project comment card itself so
             // the channel gets one complete card: who commented, content, and
             // the directly mentioned people. Avoid a second duplicate card.
+            return;
+        }
+
+        if ($eventName === TaskModel::EVENT_OVERDUE) {
+            $this->notifyOverdueTasks($eventData);
             return;
         }
 
@@ -217,6 +234,90 @@ class DiscordNotification extends Base implements NotificationInterface
         }
 
         $this->send($webhook, $project, $eventName, $eventData, $mention);
+    }
+
+    /**
+     * Bridge Kanboard core overdue batches into project-channel Discord cards.
+     *
+     * Core overdue notifications are user notifications, not project events.
+     * The same overdue task can be delivered to several Kanboard users/managers,
+     * so this method groups by project and de-duplicates by project/task id for
+     * the lifetime of this notification instance.
+     *
+     * @access protected
+     * @param  array $eventData
+     */
+    protected function notifyOverdueTasks(array $eventData)
+    {
+        if (empty($eventData['tasks']) || ! is_array($eventData['tasks'])) {
+            return;
+        }
+
+        $loadedLocales = Translator::$locales;
+        Translator::unload();
+        Translator::load($this->configModel->get('application_language', 'en_US'));
+
+        try {
+            $queuedOverdueTaskKeys = array();
+            $tasksByProject = array();
+            foreach ($eventData['tasks'] as $task) {
+                if (empty($task['project_id']) || empty($task['id'])) {
+                    continue;
+                }
+
+                $projectId = (int) $task['project_id'];
+                $taskKey = $this->getOverdueTaskKey($task);
+                if (isset($this->sentOverdueTaskKeys[$taskKey]) || isset($queuedOverdueTaskKeys[$taskKey])) {
+                    continue;
+                }
+
+                if (! isset($tasksByProject[$projectId])) {
+                    $tasksByProject[$projectId] = array();
+                }
+                $tasksByProject[$projectId][] = $task;
+                $queuedOverdueTaskKeys[$taskKey] = true;
+            }
+
+            foreach ($tasksByProject as $projectId => $tasks) {
+                if (! $this->isEventEnabled($projectId, TaskModel::EVENT_OVERDUE)) {
+                    continue;
+                }
+
+                $webhook = $this->getWebhookUrl($projectId);
+                if ($webhook === '') {
+                    continue;
+                }
+
+                $project = $this->projectModel->getById($projectId);
+                if (empty($project)) {
+                    continue;
+                }
+
+                foreach ($tasks as $task) {
+                    $singleEvent = $eventData;
+                    $singleEvent['task'] = $task;
+                    $singleEvent['tasks'] = array($task);
+
+                    $mention = $this->buildMention($this->getAssigneeId($task));
+                    $this->send($webhook, $project, TaskModel::EVENT_OVERDUE, $singleEvent, $mention);
+                    $this->sentOverdueTaskKeys[$this->getOverdueTaskKey($task)] = true;
+                }
+            }
+        } finally {
+            Translator::$locales = $loadedLocales;
+        }
+    }
+
+    /**
+     * Stable de-duplication key for one overdue task card.
+     *
+     * @access protected
+     * @param  array $task
+     * @return string
+     */
+    protected function getOverdueTaskKey(array $task)
+    {
+        return (int) $task['project_id'].':'.(int) $task['id'];
     }
 
     /**

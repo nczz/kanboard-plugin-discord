@@ -247,6 +247,107 @@ class DiscordNotificationTest extends Base
         );
     }
 
+    public function testOverdueUserNotificationsSendOneDiscordCardPerTask()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'overdue-dedupe'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $firstUserId = $userModel->create(array('username' => 'od1', 'name' => 'Overdue One'));
+        $secondUserId = $userModel->create(array('username' => 'od2', 'name' => 'Overdue Two'));
+        $this->container['userNotificationTypeModel']->saveSelectedTypes($firstUserId, array(DiscordNotification::TYPE));
+        $this->container['userNotificationTypeModel']->saveSelectedTypes($secondUserId, array(DiscordNotification::TYPE));
+
+        $captured = array();
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured[] = $payload;
+                return '';
+            });
+
+        $task = array('id' => 201, 'project_id' => $projectId, 'project_name' => 'overdue-dedupe', 'title' => 'Late task', 'owner_id' => 0);
+        $eventData = array('tasks' => array($task, $task));
+
+        $this->container['userNotificationModel']->sendUserNotification(
+            $userModel->getById($firstUserId),
+            \Kanboard\Model\TaskModel::EVENT_OVERDUE,
+            $eventData
+        );
+        $this->container['userNotificationModel']->sendUserNotification(
+            $userModel->getById($secondUserId),
+            \Kanboard\Model\TaskModel::EVENT_OVERDUE,
+            $eventData
+        );
+
+        $this->assertCount(1, $captured);
+        $this->assertStringContainsString('Late task', $captured[0]['embeds'][0]['title']);
+    }
+
+    public function testOverdueUserNotificationGroupsTasksByProject()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $firstProjectId = $projectModel->create(array('name' => 'overdue-one'));
+        $secondProjectId = $projectModel->create(array('name' => 'overdue-two'));
+        $this->container['projectMetadataModel']->save($firstProjectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+        $this->container['projectMetadataModel']->save($secondProjectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/2/x',
+        ));
+
+        $urls = array();
+        $http->expects($this->exactly(2))->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$urls) {
+                $urls[] = $url;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyUser(
+            array('id' => 1),
+            \Kanboard\Model\TaskModel::EVENT_OVERDUE,
+            array('tasks' => array(
+                array('id' => 301, 'project_id' => $firstProjectId, 'project_name' => 'overdue-one', 'title' => 'First late', 'owner_id' => 0),
+                array('id' => 302, 'project_id' => $secondProjectId, 'project_name' => 'overdue-two', 'title' => 'Second late', 'owner_id' => 0),
+            ))
+        );
+
+        $this->assertContains('https://discord.com/api/webhooks/1/x', $urls);
+        $this->assertContains('https://discord.com/api/webhooks/2/x', $urls);
+    }
+
+    public function testOverdueUserNotificationRespectsProjectEventFilter()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'overdue-user-off'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            DiscordNotification::getEventMetadataKey('task_overdue') => '0',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyUser(
+            array('id' => 1),
+            \Kanboard\Model\TaskModel::EVENT_OVERDUE,
+            array('tasks' => array(
+                array('id' => 401, 'project_id' => $projectId, 'project_name' => 'overdue-user-off', 'title' => 'Filtered late', 'owner_id' => 0),
+            ))
+        );
+    }
+
     public function testProjectNotificationBuildsEmbedAndMentionsAssignee()
     {
         $this->loadPlugin();
