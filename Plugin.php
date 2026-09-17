@@ -4,6 +4,7 @@ namespace Kanboard\Plugin\Discord;
 
 use Kanboard\Core\Plugin\Base;
 use Kanboard\Core\Translator;
+use Kanboard\Plugin\Discord\Console\TaskOverdueNotificationCommand;
 use Kanboard\Plugin\Discord\Notification\DiscordNotification;
 
 /**
@@ -43,6 +44,14 @@ class Plugin extends Base
             'Discord',
             '\Kanboard\Plugin\Discord\Notification\DiscordNotification'
         );
+
+        // Kanboard core sends overdue tasks only from the CLI command through
+        // user notification types. Replace that command with a compatible
+        // subclass that also emits project-level Discord webhook cards according
+        // to the per-project Discord event settings.
+        if (isset($this->container['cli'])) {
+            $this->container['cli']->add(new TaskOverdueNotificationCommand($this->container));
+        }
 
         // Attach the project-level settings form (webhook URL + per-event toggles)
         // to the official third-party integrations hook. Kanboard stores the

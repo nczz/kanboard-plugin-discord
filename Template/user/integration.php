@@ -7,7 +7,7 @@
     <p class="form-help">
         <?= t('Enter your numeric Discord User ID to be mentioned (pinged) in Discord notifications when you are assigned to a task or mentioned in a comment.') ?>
         <?= t('To find it: enable Developer Mode in Discord (Settings > Advanced), then right-click your name and choose "Copy User ID".') ?>
-        <?= t('For task description @mentions, also enable the Discord notification type in your Kanboard notification settings. Comment @mentions are pinged on the project comment card when the mentioned user has a Discord User ID mapped. Kanboard overdue task notifications also reach Discord through the user notification path and are de-duplicated per overdue task.') ?>
+        <?= t('For task description @mentions, also enable the Discord notification type in your Kanboard notification settings. Comment @mentions and overdue task cards use project-level Discord settings instead.') ?>
     </p>
 
     <div class="form-actions">

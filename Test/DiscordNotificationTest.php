@@ -45,6 +45,18 @@ class DiscordNotificationTest extends Base
         $this->assertArrayHasKey(DiscordNotification::TYPE, $userTypes);
     }
 
+    public function testPluginOverridesOverdueCommandForProjectDiscordCards()
+    {
+        $this->loadPlugin();
+
+        $command = $this->container['cli']->find('notification:overdue-tasks');
+
+        $this->assertInstanceOf(
+            '\Kanboard\Plugin\Discord\Console\TaskOverdueNotificationCommand',
+            $command
+        );
+    }
+
     public function testNoWebhookMeansNoSend()
     {
         $this->loadPlugin();
@@ -346,6 +358,46 @@ class DiscordNotificationTest extends Base
                 array('id' => 401, 'project_id' => $projectId, 'project_name' => 'overdue-user-off', 'title' => 'Filtered late', 'owner_id' => 0),
             ))
         );
+    }
+
+    public function testOverdueCommandSendsDiscordCardWithoutUserDiscordNotificationType()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $taskCreationModel = new TaskCreationModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'overdue-cli'));
+        $ownerId = $userModel->create(array('username' => 'cli-owner', 'name' => 'CLI Owner'));
+        $taskId = $taskCreationModel->create(array(
+            'project_id' => $projectId,
+            'title' => 'CLI overdue task',
+            'owner_id' => $ownerId,
+            'date_due' => time() - 3600,
+        ));
+        $this->assertNotFalse($taskId);
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = array();
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured[] = $payload;
+                return '';
+            });
+
+        $command = $this->container['cli']->find('notification:overdue-tasks');
+        $exitCode = $command->run(
+            new \Symfony\Component\Console\Input\ArrayInput(array('--project' => (string) $projectId)),
+            new \Symfony\Component\Console\Output\NullOutput()
+        );
+
+        $this->assertSame(0, $exitCode);
+        $this->assertCount(1, $captured);
+        $this->assertStringContainsString('CLI overdue task', $captured[0]['embeds'][0]['title']);
     }
 
     public function testProjectNotificationBuildsEmbedAndMentionsAssignee()

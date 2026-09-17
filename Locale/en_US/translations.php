@@ -22,8 +22,8 @@ return array(
         => 'Enter your numeric Discord User ID to be mentioned (pinged) in Discord notifications when you are assigned to a task or mentioned in a comment.',
     'To find it: enable Developer Mode in Discord (Settings > Advanced), then right-click your name and choose "Copy User ID".'
         => 'To find it: enable Developer Mode in Discord (Settings > Advanced), then right-click your name and choose "Copy User ID".',
-    'For task description @mentions, also enable the Discord notification type in your Kanboard notification settings. Comment @mentions are pinged on the project comment card when the mentioned user has a Discord User ID mapped. Kanboard overdue task notifications also reach Discord through the user notification path and are de-duplicated per overdue task.'
-        => 'For task description @mentions, also enable the Discord notification type in your Kanboard notification settings. Comment @mentions are pinged on the project comment card when the mentioned user has a Discord User ID mapped. Kanboard overdue task notifications also reach Discord through the user notification path and are de-duplicated per overdue task.',
+    'For task description @mentions, also enable the Discord notification type in your Kanboard notification settings. Comment @mentions and overdue task cards use project-level Discord settings instead.'
+        => 'For task description @mentions, also enable the Discord notification type in your Kanboard notification settings. Comment @mentions and overdue task cards use project-level Discord settings instead.',
     'Discord notification events' => 'Discord notification events',
     'Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.'
         => 'Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.',

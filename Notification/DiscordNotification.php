@@ -56,13 +56,13 @@ class DiscordNotification extends Base implements NotificationInterface
     const META_EVENT_PREFIX = 'discord_event_';
 
     /**
-     * Per-process overdue de-duplication. Kanboard core sends overdue
-     * notifications through the user-notification path, once per recipient; the
-     * Discord project channel must still receive only one card per overdue task.
+     * Per-process overdue de-duplication. Kanboard core can notify several
+     * users/managers about the same overdue task; the Discord project channel
+     * must still receive only one card per overdue task.
      *
      * @var array
      */
-    protected $sentOverdueTaskKeys = array();
+    protected static $sentOverdueTaskKeys = array();
 
     /**
      * Events exposed in the project Discord settings.
@@ -198,7 +198,9 @@ class DiscordNotification extends Base implements NotificationInterface
         }
 
         if ($eventName === TaskModel::EVENT_OVERDUE) {
-            $this->notifyOverdueTasks($eventData);
+            if (! empty($eventData['tasks']) && is_array($eventData['tasks'])) {
+                $this->sendOverdueTaskNotifications($eventData['tasks']);
+            }
             return;
         }
 
@@ -237,19 +239,19 @@ class DiscordNotification extends Base implements NotificationInterface
     }
 
     /**
-     * Bridge Kanboard core overdue batches into project-channel Discord cards.
+     * Bridge Kanboard core overdue task lists into project-channel Discord cards.
      *
-     * Core overdue notifications are user notifications, not project events.
-     * The same overdue task can be delivered to several Kanboard users/managers,
-     * so this method groups by project and de-duplicates by project/task id for
-     * the lifetime of this notification instance.
+     * Core overdue checks are command-driven, not project events. The same
+     * overdue task can be delivered to several Kanboard users/managers, so this
+     * method groups by project and de-duplicates by project/task id for the
+     * lifetime of the current PHP process.
      *
-     * @access protected
-     * @param  array $eventData
+     * @access public
+     * @param  array $tasks
      */
-    protected function notifyOverdueTasks(array $eventData)
+    public function sendOverdueTaskNotifications(array $tasks)
     {
-        if (empty($eventData['tasks']) || ! is_array($eventData['tasks'])) {
+        if (empty($tasks)) {
             return;
         }
 
@@ -260,14 +262,14 @@ class DiscordNotification extends Base implements NotificationInterface
         try {
             $queuedOverdueTaskKeys = array();
             $tasksByProject = array();
-            foreach ($eventData['tasks'] as $task) {
+            foreach ($tasks as $task) {
                 if (empty($task['project_id']) || empty($task['id'])) {
                     continue;
                 }
 
                 $projectId = (int) $task['project_id'];
                 $taskKey = $this->getOverdueTaskKey($task);
-                if (isset($this->sentOverdueTaskKeys[$taskKey]) || isset($queuedOverdueTaskKeys[$taskKey])) {
+                if (isset(self::$sentOverdueTaskKeys[$taskKey]) || isset($queuedOverdueTaskKeys[$taskKey])) {
                     continue;
                 }
 
@@ -278,7 +280,7 @@ class DiscordNotification extends Base implements NotificationInterface
                 $queuedOverdueTaskKeys[$taskKey] = true;
             }
 
-            foreach ($tasksByProject as $projectId => $tasks) {
+            foreach ($tasksByProject as $projectId => $projectTasks) {
                 if (! $this->isEventEnabled($projectId, TaskModel::EVENT_OVERDUE)) {
                     continue;
                 }
@@ -293,14 +295,16 @@ class DiscordNotification extends Base implements NotificationInterface
                     continue;
                 }
 
-                foreach ($tasks as $task) {
-                    $singleEvent = $eventData;
-                    $singleEvent['task'] = $task;
-                    $singleEvent['tasks'] = array($task);
+                foreach ($projectTasks as $task) {
+                    $singleEvent = array(
+                        'task' => $task,
+                        'tasks' => array($task),
+                        'project_name' => isset($task['project_name']) ? $task['project_name'] : $project['name'],
+                    );
 
                     $mention = $this->buildMention($this->getAssigneeId($task));
                     $this->send($webhook, $project, TaskModel::EVENT_OVERDUE, $singleEvent, $mention);
-                    $this->sentOverdueTaskKeys[$this->getOverdueTaskKey($task)] = true;
+                    self::$sentOverdueTaskKeys[$this->getOverdueTaskKey($task)] = true;
                 }
             }
         } finally {

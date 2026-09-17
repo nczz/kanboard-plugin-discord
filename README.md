@@ -93,10 +93,10 @@ they map cleanly to the split events; move events remain off unless their new
 individual move toggles are checked.
 
 Overdue cards are emitted when Kanboard's `notification:overdue-tasks` command
-runs. Kanboard core routes overdue tasks through user notifications; this plugin
-bridges those batches back to the project Discord webhook and de-duplicates them
-so the channel receives one card per overdue task even when several users or
-managers are notified.
+runs. Kanboard core routes overdue tasks through a command instead of regular
+project events; this plugin extends that command to send project Discord cards
+directly and de-duplicates them so the channel receives one card per overdue
+task even when several users or managers are notified by Kanboard.
 
 ### Card layout and content length
 
@@ -125,8 +125,8 @@ Discord > Content excerpt length**:
    Discord User ID and save.
 3. In Kanboard: go to **My profile > Notifications** and enable the **Discord**
    notification type if you want task-description @mentions to use Kanboard's
-   dedicated user notification path, or if this user is expected to trigger
-   overdue-task bridging from Kanboard's overdue notification command.
+   dedicated user notification path. Comment @mentions and overdue task cards
+   use project-level Discord settings instead.
 
 Now that user will be pinged in Discord when assigned to a task or mentioned in
 a comment. Comment @mentions ping the mentioned mapped Discord users on the
