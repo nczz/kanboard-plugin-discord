@@ -57,6 +57,34 @@ class DiscordNotificationTest extends Base
         );
     }
 
+    public function testPluginEnablesDiscordUserNotificationTypeByDefault()
+    {
+        $userModel = new UserModel($this->container);
+        $userId = $userModel->create(array('username' => 'default-discord', 'name' => 'Default Discord'));
+
+        $this->loadPlugin();
+
+        $this->assertContains(
+            DiscordNotification::TYPE,
+            $this->container['userNotificationTypeModel']->getSelectedTypes($userId)
+        );
+    }
+
+    public function testDefaultUserNotificationActivationDoesNotOverrideLaterOptOut()
+    {
+        $userModel = new UserModel($this->container);
+        $userId = $userModel->create(array('username' => 'discord-optout', 'name' => 'Discord Optout'));
+
+        $this->loadPlugin();
+        $this->container['userNotificationTypeModel']->saveSelectedTypes($userId, array());
+        $this->loadPlugin();
+
+        $this->assertNotContains(
+            DiscordNotification::TYPE,
+            $this->container['userNotificationTypeModel']->getSelectedTypes($userId)
+        );
+    }
+
     public function testNoWebhookMeansNoSend()
     {
         $this->loadPlugin();

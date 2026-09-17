@@ -6,6 +6,7 @@ use Kanboard\Core\Plugin\Base;
 use Kanboard\Core\Translator;
 use Kanboard\Plugin\Discord\Console\TaskOverdueNotificationCommand;
 use Kanboard\Plugin\Discord\Notification\DiscordNotification;
+use Kanboard\Model\UserModel;
 
 /**
  * Discord Plugin
@@ -17,6 +18,10 @@ use Kanboard\Plugin\Discord\Notification\DiscordNotification;
  */
 class Plugin extends Base
 {
+    /**
+     * Config flag recording the one-time default user notification activation.
+     */
+    const CONFIG_DEFAULT_USER_NOTIFICATIONS_ENABLED = 'discord_default_user_notifications_enabled';
     /**
      * Initialize plugin.
      *
@@ -45,6 +50,8 @@ class Plugin extends Base
             '\Kanboard\Plugin\Discord\Notification\DiscordNotification'
         );
 
+        $this->enableDefaultUserNotificationsOnce();
+
         // Kanboard core sends overdue tasks only from the CLI command through
         // user notification types. Replace that command with a compatible
         // subclass that also emits project-level Discord webhook cards according
@@ -66,6 +73,50 @@ class Plugin extends Base
         // Note: no CSP changes required. Discord webhooks are invoked server-side
         // via the Kanboard HTTP client, and the default img-src policy ('*') already
         // permits any embed preview images.
+    }
+
+    /**
+     * Enable the Discord user-notification type for every existing active user
+     * once when the plugin is installed/upgraded.
+     *
+     * Users can still opt out afterwards from their notification settings; the
+     * config flag prevents later requests from re-enabling a deliberate opt-out.
+     *
+     * @access protected
+     */
+    protected function enableDefaultUserNotificationsOnce()
+    {
+        if ($this->configModel->getOption(self::CONFIG_DEFAULT_USER_NOTIFICATIONS_ENABLED, '') === '1') {
+            return;
+        }
+
+        $users = $this->db->table(UserModel::TABLE)
+            ->columns('id')
+            ->eq('is_active', 1)
+            ->findAll();
+
+        $this->db->startTransaction();
+        foreach ($users as $user) {
+            $userId = (int) $user['id'];
+            if ($userId <= 0) {
+                continue;
+            }
+
+            $exists = $this->db->table('user_has_notification_types')
+                ->eq('user_id', $userId)
+                ->eq('notification_type', DiscordNotification::TYPE)
+                ->exists();
+
+            if (! $exists) {
+                $this->db->table('user_has_notification_types')->insert(array(
+                    'user_id' => $userId,
+                    'notification_type' => DiscordNotification::TYPE,
+                ));
+            }
+        }
+        $this->db->closeTransaction();
+
+        $this->configModel->save(array(self::CONFIG_DEFAULT_USER_NOTIFICATIONS_ENABLED => '1'));
     }
 
     /**
