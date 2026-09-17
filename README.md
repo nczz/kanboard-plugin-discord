@@ -123,11 +123,12 @@ Discord > Content excerpt length**:
    a user and choose **Copy User ID**.
 2. In Kanboard: go to **My profile > Integrations > Discord**, paste the numeric
    Discord User ID and save.
-3. The plugin enables Kanboard's **Discord** notification type for all existing
-   active users once when installed/upgraded. That user-level notification type
-   is only used for task-description @mentions. Comment @mentions and overdue
-   task cards use project-level Discord settings instead, and users can opt out
-   from task-description mention cards in **My profile > Notifications**.
+3. The plugin enables Kanboard's **Discord** notification type for active users
+   when installed/upgraded and for new users after they are created. That
+   user-level notification type is only used for task-description @mentions.
+   Comment @mentions and overdue task cards use project-level Discord settings
+   instead, and users can opt out from task-description mention cards in
+   **My profile > Notifications**.
 
 Now that user will be pinged in Discord when assigned to a task or mentioned in
 a comment. Comment @mentions ping the mentioned mapped Discord users on the

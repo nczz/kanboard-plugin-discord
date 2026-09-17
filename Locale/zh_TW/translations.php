@@ -14,8 +14,8 @@ return array(
         => '輸入你的數字型 Discord 使用者 ID，當你被指派任務或在留言中被提及時，Discord 通知會標註（tag）你。',
     'To find it: enable Developer Mode in Discord (Settings > Advanced), then right-click your name and choose "Copy User ID".'
         => '取得方式：在 Discord 開啟開發者模式（設定 > 進階），然後右鍵點你的名字選擇「複製使用者 ID」。',
-    'The Discord notification type is enabled for users by default when the plugin is installed. It is only needed for task-description @mentions; comment @mentions and overdue task cards use project-level Discord settings instead. Users can opt out from task-description mention cards in Kanboard notification settings.'
-        => '外掛安裝後會預設為使用者啟用 Discord 通知類型。這只用於任務描述 @提及；留言 @提及與逾期任務卡片會使用專案層級的 Discord 設定。使用者仍可在 Kanboard 通知設定中取消接收任務描述提及卡片。',
+    'The Discord notification type is enabled for users by default when the plugin is installed and for new users after they are created. It is only needed for task-description @mentions; comment @mentions and overdue task cards use project-level Discord settings instead. Users can opt out from task-description mention cards in Kanboard notification settings.'
+        => '外掛安裝後，以及新增使用者後，會預設為使用者啟用 Discord 通知類型。這只用於任務描述 @提及；留言 @提及與逾期任務卡片會使用專案層級的 Discord 設定。使用者仍可在 Kanboard 通知設定中取消接收任務描述提及卡片。',
     'Discord notification events' => 'Discord 通知事件',
     'Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.'
         => '選擇哪些 Kanboard 事件要送到 Discord。任務移動通知預設不勾選，因為拖曳和排序活動通常較吵。',

@@ -70,6 +70,44 @@ class DiscordNotificationTest extends Base
         );
     }
 
+    public function testPluginEnablesDiscordUserNotificationTypeForNewUsers()
+    {
+        $this->loadPlugin();
+
+        $userModel = new UserModel($this->container);
+        $userId = $userModel->create(array('username' => 'new-default-discord', 'name' => 'New Default Discord'));
+
+        $this->loadPlugin();
+
+        $this->assertContains(
+            DiscordNotification::TYPE,
+            $this->container['userNotificationTypeModel']->getSelectedTypes($userId)
+        );
+    }
+
+    public function testMarkerBackfillPreservesExistingOptOuts()
+    {
+        $userModel = new UserModel($this->container);
+        $userId = $userModel->create(array('username' => 'legacy-discord-optout', 'name' => 'Legacy Discord Optout'));
+
+        $this->container['configModel']->save(array(
+            Plugin::CONFIG_DEFAULT_USER_NOTIFICATIONS_ENABLED => '1',
+        ));
+        $this->loadPlugin();
+
+        $this->assertNotContains(
+            DiscordNotification::TYPE,
+            $this->container['userNotificationTypeModel']->getSelectedTypes($userId)
+        );
+        $this->assertSame(
+            '1',
+            $this->container['userMetadataModel']->get(
+                $userId,
+                Plugin::USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED
+            )
+        );
+    }
+
     public function testDefaultUserNotificationActivationDoesNotOverrideLaterOptOut()
     {
         $userModel = new UserModel($this->container);

@@ -19,9 +19,23 @@ use Kanboard\Model\UserModel;
 class Plugin extends Base
 {
     /**
-     * Config flag recording the one-time default user notification activation.
+     * Config flag recording the first default user notification activation.
      */
     const CONFIG_DEFAULT_USER_NOTIFICATIONS_ENABLED = 'discord_default_user_notifications_enabled';
+
+    /**
+     * Config flag recording the metadata backfill for users processed before
+     * per-user default notification markers existed.
+     */
+    const CONFIG_DEFAULT_USER_NOTIFICATIONS_MARKED = 'discord_default_user_notifications_marked';
+
+    /**
+     * User metadata flag showing this user already received the default
+     * Discord notification decision. It preserves later opt-outs while allowing
+     * new users to be enabled on the next plugin initialization.
+     */
+    const USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED = 'discord.default_user_notifications.processed';
+
     /**
      * Initialize plugin.
      *
@@ -50,7 +64,7 @@ class Plugin extends Base
             '\Kanboard\Plugin\Discord\Notification\DiscordNotification'
         );
 
-        $this->enableDefaultUserNotificationsOnce();
+        $this->enableDefaultUserNotifications();
 
         // Kanboard core sends overdue tasks only from the CLI command through
         // user notification types. Replace that command with a compatible
@@ -76,19 +90,19 @@ class Plugin extends Base
     }
 
     /**
-     * Enable the Discord user-notification type for every existing active user
-     * once when the plugin is installed/upgraded.
+     * Enable the Discord user-notification type by default for active users.
      *
-     * Users can still opt out afterwards from their notification settings; the
-     * config flag prevents later requests from re-enabling a deliberate opt-out.
+     * Existing active users are enabled once when the plugin is installed. Each
+     * processed user is then marked in user metadata so later requests can enable
+     * only newly created or newly activated users without overriding an existing
+     * user's deliberate opt-out.
      *
      * @access protected
      */
-    protected function enableDefaultUserNotificationsOnce()
+    protected function enableDefaultUserNotifications()
     {
-        if ($this->configModel->getOption(self::CONFIG_DEFAULT_USER_NOTIFICATIONS_ENABLED, '') === '1') {
-            return;
-        }
+        $defaultsApplied = $this->configModel->getOption(self::CONFIG_DEFAULT_USER_NOTIFICATIONS_ENABLED, '') === '1';
+        $markersBackfilled = $this->configModel->getOption(self::CONFIG_DEFAULT_USER_NOTIFICATIONS_MARKED, '') === '1';
 
         $users = $this->db->table(UserModel::TABLE)
             ->columns('id')
@@ -102,21 +116,85 @@ class Plugin extends Base
                 continue;
             }
 
-            $exists = $this->db->table('user_has_notification_types')
-                ->eq('user_id', $userId)
-                ->eq('notification_type', DiscordNotification::TYPE)
-                ->exists();
-
-            if (! $exists) {
-                $this->db->table('user_has_notification_types')->insert(array(
-                    'user_id' => $userId,
-                    'notification_type' => DiscordNotification::TYPE,
-                ));
+            if ($defaultsApplied && ! $markersBackfilled) {
+                $this->markDefaultUserNotificationProcessed($userId);
+                continue;
             }
+
+            if ($this->isDefaultUserNotificationProcessed($userId)) {
+                continue;
+            }
+
+            $this->enableDiscordUserNotificationType($userId);
+            $this->markDefaultUserNotificationProcessed($userId);
         }
         $this->db->closeTransaction();
 
-        $this->configModel->save(array(self::CONFIG_DEFAULT_USER_NOTIFICATIONS_ENABLED => '1'));
+        $options = array();
+        if (! $defaultsApplied) {
+            $options[self::CONFIG_DEFAULT_USER_NOTIFICATIONS_ENABLED] = '1';
+        }
+        if (! $markersBackfilled) {
+            $options[self::CONFIG_DEFAULT_USER_NOTIFICATIONS_MARKED] = '1';
+        }
+        if (! empty($options)) {
+            $this->configModel->save($options);
+        }
+    }
+
+    /**
+     * Return true when the default notification decision was already recorded
+     * for this user.
+     *
+     * @access protected
+     * @param integer $userId
+     * @return boolean
+     */
+    protected function isDefaultUserNotificationProcessed($userId)
+    {
+        return $this->db->table('user_has_metadata')
+            ->eq('user_id', $userId)
+            ->eq('name', self::USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED)
+            ->exists();
+    }
+
+    /**
+     * Mark a user as processed by the default Discord notification bootstrap.
+     *
+     * @access protected
+     * @param integer $userId
+     */
+    protected function markDefaultUserNotificationProcessed($userId)
+    {
+        if ($this->isDefaultUserNotificationProcessed($userId)) {
+            return;
+        }
+        $this->db->table('user_has_metadata')->insert(array(
+            'user_id' => $userId,
+            'name' => self::USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED,
+            'value' => '1',
+        ));
+    }
+
+    /**
+     * Enable Discord as a selected user notification type if it is missing.
+     *
+     * @access protected
+     * @param integer $userId
+     */
+    protected function enableDiscordUserNotificationType($userId)
+    {
+        $exists = $this->db->table('user_has_notification_types')
+            ->eq('user_id', $userId)
+            ->eq('notification_type', DiscordNotification::TYPE)
+            ->exists();
+
+        if (! $exists) {
+            $this->db->table('user_has_notification_types')->insert(array(
+                'user_id' => $userId,
+                'notification_type' => DiscordNotification::TYPE,
+            ));
+        }
     }
 
     /**
