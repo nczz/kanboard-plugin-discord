@@ -25,8 +25,6 @@ return array(
     'The Discord notification type is enabled for users by default when the plugin is installed and for new users after they are created. It is only needed for task-description @mentions; comment @mentions and overdue task cards use project-level Discord settings instead. Users can opt out from task-description mention cards in Kanboard notification settings.'
         => 'The Discord notification type is enabled for users by default when the plugin is installed and for new users after they are created. It is only needed for task-description @mentions; comment @mentions and overdue task cards use project-level Discord settings instead. Users can opt out from task-description mention cards in Kanboard notification settings.',
     'Discord notification events' => 'Discord notification events',
-    'Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.'
-        => 'Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.',
     'Choose which Kanboard events should be sent to Discord and which Email notifications should be suppressed.'
         => 'Choose which Kanboard events should be sent to Discord and which Email notifications should be suppressed.',
     'Suppressing Email does not require Discord to be enabled. If Discord is also disabled, the event is muted for both Discord and Email.'

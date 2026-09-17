@@ -17,8 +17,6 @@ return array(
     'The Discord notification type is enabled for users by default when the plugin is installed and for new users after they are created. It is only needed for task-description @mentions; comment @mentions and overdue task cards use project-level Discord settings instead. Users can opt out from task-description mention cards in Kanboard notification settings.'
         => '外掛安裝後，以及新增使用者後，會預設為使用者啟用 Discord 通知類型。這只用於任務描述 @提及；留言 @提及與逾期任務卡片會使用專案層級的 Discord 設定。使用者仍可在 Kanboard 通知設定中取消接收任務描述提及卡片。',
     'Discord notification events' => 'Discord 通知事件',
-    'Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.'
-        => '選擇哪些 Kanboard 事件要送到 Discord。任務移動通知預設不勾選，因為拖曳和排序活動通常較吵。',
     'Choose which Kanboard events should be sent to Discord and which Email notifications should be suppressed.'
         => '選擇哪些 Kanboard 事件要送到 Discord，以及哪些 Email 通知要被抑制。',
     'Suppressing Email does not require Discord to be enabled. If Discord is also disabled, the event is muted for both Discord and Email.'

@@ -1,6 +1,8 @@
 Discord plugin for Kanboard
 ===========================
 
+[繁體中文 README](README.zh-TW.md)
+
 Send rich [Discord](https://discord.com/) notification cards for Kanboard
 project events, and **@mention the Discord users** mapped to the task assignee
 or the person mentioned in a comment.
