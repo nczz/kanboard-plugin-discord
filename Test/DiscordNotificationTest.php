@@ -411,6 +411,131 @@ class DiscordNotificationTest extends Base
         );
     }
 
+    public function testGlobalWebhookUsedWhenProjectWebhookMissing()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'global-webhook'));
+        $this->container['configModel']->save(array(
+            DiscordNotification::CONFIG_WEBHOOK_URL => 'https://discord.com/api/webhooks/100/global-token',
+        ));
+
+        $capturedUrl = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$capturedUrl) {
+                $capturedUrl = $url;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 2, 'project_id' => $projectId, 'project_name' => 'global-webhook', 'title' => 'x', 'owner_id' => 0))
+        );
+
+        $this->assertSame('https://discord.com/api/webhooks/100/global-token', $capturedUrl);
+    }
+
+    public function testProjectWebhookOverridesGlobalWebhook()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'project-webhook'));
+        $this->container['configModel']->save(array(
+            DiscordNotification::CONFIG_WEBHOOK_URL => 'https://discord.com/api/webhooks/100/global-token',
+        ));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/200/project-token',
+        ));
+
+        $capturedUrl = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$capturedUrl) {
+                $capturedUrl = $url;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 3, 'project_id' => $projectId, 'project_name' => 'project-webhook', 'title' => 'x', 'owner_id' => 0))
+        );
+
+        $this->assertSame('https://discord.com/api/webhooks/200/project-token', $capturedUrl);
+    }
+
+    public function testInvalidProjectWebhookDoesNotFallbackToGlobalWebhook()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'bad-project-webhook'));
+        $this->container['configModel']->save(array(
+            DiscordNotification::CONFIG_WEBHOOK_URL => 'https://discord.com/api/webhooks/100/global-token',
+        ));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://example.com/not-discord',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 4, 'project_id' => $projectId, 'project_name' => 'bad-project-webhook', 'title' => 'x', 'owner_id' => 0))
+        );
+    }
+
+    public function testInvalidGlobalWebhookMeansNoSend()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'bad-global-webhook'));
+        $this->container['configModel']->save(array(
+            DiscordNotification::CONFIG_WEBHOOK_URL => 'https://example.com/not-discord',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 4, 'project_id' => $projectId, 'project_name' => 'bad-global-webhook', 'title' => 'x', 'owner_id' => 0))
+        );
+    }
+
+    public function testGlobalWebhookDoesNotBypassDisabledProjectEvent()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'global-event-off'));
+        $this->container['configModel']->save(array(
+            DiscordNotification::CONFIG_WEBHOOK_URL => 'https://discord.com/api/webhooks/100/global-token',
+        ));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::getEventMetadataKey('task_create') => '0',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 5, 'project_id' => $projectId, 'project_name' => 'global-event-off', 'title' => 'x', 'owner_id' => 0))
+        );
+    }
+
     public function testTaskMuteDiscordDoesNotMuteEmail()
     {
         $this->loadPlugin();

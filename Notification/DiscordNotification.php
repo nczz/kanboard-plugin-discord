@@ -15,7 +15,8 @@ use Kanboard\Plugin\Discord\Builder\EmbedBuilder;
 /**
  * Discord Notification
  *
- * Sends Kanboard events to a per-project Discord channel via an Incoming Webhook.
+ * Sends Kanboard events to Discord via a project Incoming Webhook, falling back
+ * to the global default Incoming Webhook when a project does not set one.
  *
  * Two delivery paths (see Kanboard\Job\NotificationJob and
  * Kanboard\Console\TaskOverdueNotificationCommand):
@@ -28,8 +29,8 @@ use Kanboard\Plugin\Discord\Builder\EmbedBuilder;
  *     overdue notifications only through the user-notification path. Comment
  *     @mentions are handled by notifyProject() to avoid duplicate Discord cards.
  *
- * Sending is gated by the presence of a webhook URL in the project metadata,
- * so it is inert for projects that have not configured Discord.
+ * Sending is gated by the presence of either a valid project webhook URL or a
+ * valid global default webhook URL, so it is inert when neither is configured.
  *
  * @package Kanboard\Plugin\Discord\Notification
  */
@@ -39,6 +40,11 @@ class DiscordNotification extends Base implements NotificationInterface
      * Project metadata key holding the Discord Incoming Webhook URL.
      */
     const META_WEBHOOK_URL = 'discord_webhook_url';
+
+    /**
+     * Application setting key holding the global fallback Discord Incoming Webhook URL.
+     */
+    const CONFIG_WEBHOOK_URL = 'discord_default_webhook_url';
 
     /**
      * Notification type key registered with Kanboard.
@@ -554,8 +560,8 @@ class DiscordNotification extends Base implements NotificationInterface
     }
 
     /**
-     * Resolve and validate the project's webhook URL.
-     *
+     * Resolve and validate the project's webhook URL, falling back to the global
+     * default webhook only when the project has no webhook configured.
      * @access protected
      * @param  integer $projectId
      * @return string  Empty string when unset or blocked.
@@ -563,6 +569,12 @@ class DiscordNotification extends Base implements NotificationInterface
     protected function getWebhookUrl($projectId)
     {
         $url = trim($this->projectMetadataModel->get($projectId, self::META_WEBHOOK_URL, ''));
+        $source = 'project '.$projectId;
+
+        if ($url === '') {
+            $url = trim($this->configModel->getOption(self::CONFIG_WEBHOOK_URL, ''));
+            $source = 'global default';
+        }
 
         if ($url === '') {
             return '';
@@ -570,14 +582,14 @@ class DiscordNotification extends Base implements NotificationInterface
 
         // Only allow official Discord webhook endpoints.
         if (! $this->isDiscordWebhookUrl($url)) {
-            $this->logger->error('Discord plugin: invalid webhook URL for project '.$projectId);
+            $this->logger->error('Discord plugin: invalid webhook URL for '.$source);
             return '';
         }
 
         // SSRF protection: reuse Kanboard's private-network guard unless the admin
         // explicitly allows private networks for webhooks.
         if (! WEBHOOK_ALLOW_PRIVATE_NETWORKS && $this->httpClient->isPrivateURL($url)) {
-            $this->logger->info('Discord plugin: blocked webhook to private network URL for project '.$projectId);
+            $this->logger->info('Discord plugin: blocked webhook to private network URL for '.$source);
             return '';
         }
 

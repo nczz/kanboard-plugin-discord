@@ -9,7 +9,7 @@
     <?= $this->form->text('discord_webhook_url', $values, array(), array('placeholder="https://discord.com/api/webhooks/..."')) ?>
 
     <p class="form-help">
-        <?= t('Create an Incoming Webhook in your Discord channel (Server Settings > Integrations > Webhooks) and paste the URL here. Leave empty to disable Discord notifications for this project.') ?>
+        <?= t('Create an Incoming Webhook in this project\'s Discord channel and paste the URL here. Leave empty to use the global default Discord webhook URL, when configured.') ?>
     </p>
 
     <?= $this->form->label(t('Content excerpt length'), 'discord_excerpt_length') ?>

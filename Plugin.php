@@ -46,9 +46,9 @@ class Plugin extends Base
     {
         // Register the Discord notification type as a project notification.
         // It is registered as "hidden" so that it is always evaluated for every
-        // project (like the built-in webhook/activity_stream types). Whether a
-        // message is actually sent is gated by the presence of a webhook URL in
-        // the project metadata (see DiscordNotification::notifyProject()).
+        // project. Whether a message is actually sent is gated by the presence
+        // of either a project webhook URL or the global fallback webhook URL
+        // (see DiscordNotification::notifyProject()).
         $this->projectNotificationTypeModel->setType(
             DiscordNotification::TYPE,
             'Discord',
@@ -84,9 +84,14 @@ class Plugin extends Base
             $this->container['cli']->add(new TaskOverdueNotificationCommand($this->container));
         }
 
-        // Attach the project-level settings form (webhook URL + per-event toggles)
-        // to the official third-party integrations hook. Kanboard stores the
-        // submitted fields into project_has_metadata automatically.
+        // Attach the system-level fallback webhook setting to the official
+        // integrations settings page. Kanboard stores submitted fields into the
+        // config table automatically.
+        $this->template->hook->attach('template:config:integrations', 'discord:config/integration');
+
+        // Attach the project-level settings form (project webhook URL + per-event
+        // toggles) to the official third-party integrations hook. Kanboard stores
+        // the submitted fields into project_has_metadata automatically.
         $this->template->hook->attach('template:project:integrations', 'discord:project/integration');
 
         // Attach the user-level settings form (Discord User ID for mentions) to

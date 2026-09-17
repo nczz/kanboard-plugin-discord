@@ -4,8 +4,11 @@ return array(
     'Send rich Discord notifications per project and mention mapped Discord users' => '依專案發送豐富的 Discord 通知卡片，並標註對應的 Discord 使用者',
     'Discord' => 'Discord',
     'Discord Webhook URL' => 'Discord Webhook 網址',
-    'Create an Incoming Webhook in your Discord channel (Server Settings > Integrations > Webhooks) and paste the URL here. Leave empty to disable Discord notifications for this project.'
-        => '在你的 Discord 頻道建立 Incoming Webhook（伺服器設定 > 整合 > Webhook），並將網址貼在這裡。留空則停用此專案的 Discord 通知。',
+    'Create an Incoming Webhook in this project\'s Discord channel and paste the URL here. Leave empty to use the global default Discord webhook URL, when configured.'
+        => '在此專案的 Discord 頻道建立 Incoming Webhook，並將網址貼在這裡。留空則在已設定時使用全域預設 Discord webhook 網址。',
+    'Default Discord Webhook URL' => '預設 Discord Webhook 網址',
+    'Create an Incoming Webhook in your default Discord channel and paste the URL here. Projects without their own Discord webhook URL will send notifications to this webhook. Leave empty to require each project to configure its own webhook.'
+        => '在預設 Discord 頻道建立 Incoming Webhook，並將網址貼在這裡。沒有設定專屬 Discord webhook 網址的專案會把通知送到這個 webhook。留空則要求每個專案自行設定 webhook。',
     'Content excerpt length' => '內容摘要長度',
     'Maximum number of characters shown from task descriptions, comments and subtasks. The status line (who did what) is always shown in full. Leave empty for the default (280). Set 0 to hide content excerpts entirely.'
         => '任務描述、留言、子任務在通知中最多顯示的字數。狀態列（誰對哪個任務做了什麼）一律完整顯示。留空使用預設值（280），設為 0 則完全不顯示內容摘要。',

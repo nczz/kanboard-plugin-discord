@@ -13,7 +13,7 @@ Kanboard Discord 外掛
 功能特色
 --------
 
-- 依專案路由：每個專案可發送到自己的 Discord channel webhook。
+- 依專案路由並支援全域預設 webhook fallback：每個專案可發送到自己的 Discord channel webhook；未設定專案 webhook 時，會使用系統預設 webhook。
 - 專案層級通知矩陣：每個支援事件都可獨立設定是否送 Discord、是否抑制 Kanboard Email 通知。
 - 任務層級通知規則：可在單一任務卡片上，針對指定事件排除 Discord 和/或 Email，不影響專案預設。
 - 豐富 embed 卡片：包含事件顏色、任務連結、負責人、欄位。
@@ -54,10 +54,11 @@ ln -s /path/to/kanboard-plugin-discord plugins/Discord
 
 ### 1. 將專案路由到 Discord 頻道
 
-1. 在 Discord：進入 **Server Settings > Integrations > Webhooks > New Webhook**，選擇目標頻道，複製 webhook URL。
-2. 在 Kanboard：開啟專案，進入 **Settings > Integrations > Discord**，貼上 webhook URL 並儲存。
+1. 在 Discord：進入 **Server Settings > Integrations > Webhooks > New Webhook**，選擇預設目標頻道，複製 webhook URL。
+2. 在 Kanboard：進入 **Settings > Integrations > Discord**，將 URL 貼到 **Default Discord Webhook URL** 並儲存。沒有設定專案 webhook 的專案會送到這個 fallback。
+3. 選用：開啟專案，進入 **Project settings > Integrations > Discord**，貼上該專案專用 webhook URL 並儲存。專案 webhook 一律優先於全域預設 webhook。
 
-若要讓多個專案送到同一個頻道，可在每個專案貼上同一個 webhook URL。
+若要讓多個專案送到同一個頻道，可讓它們的專案 webhook 留空並使用全域預設 webhook；需要明確專案設定時，也可以在每個專案貼上同一個 webhook URL。
 
 ### 事件過濾與 Email 抑制
 
@@ -74,7 +75,7 @@ ln -s /path/to/kanboard-plugin-discord plugins/Discord
 
 | 層級 | Discord 決策 | Email 決策 |
 | --- | --- | --- |
-| 專案預設 | `Discord notification` 決定此事件是否可送到專案 webhook。 | `Suppress Email` 決定是否阻擋此事件的 Kanboard Email delivery。 |
+| 專案預設 | `Discord notification` 決定此事件是否可送到 Discord。優先使用專案 webhook URL；若專案 webhook 留空，則使用全域預設 webhook URL。 | `Suppress Email` 決定是否阻擋此事件的 Kanboard Email delivery。 |
 | 任務排除 | `Mute Discord` 只能針對此任務阻擋 Discord 事件，不能啟用專案層級已關閉的事件。 | `Mute Email` 只能針對此任務阻擋 Email delivery。 |
 | 使用者偏好 | Discord user notification type 只影響任務描述 @mention 卡片。專案卡片仍使用專案設定。 | 使用者原本的 Kanboard Email checkbox 仍會生效。若使用者未選 Email，就不會寄 Email。 |
 
@@ -84,7 +85,7 @@ ln -s /path/to/kanboard-plugin-discord plugins/Discord
 Discord sends when:
 project Discord event enabled
 AND task does not mute Discord for this event
-AND project webhook URL is valid
+AND (project webhook URL 有效 OR project webhook 留空且 global default webhook URL 有效)
 ```
 
 ```text
@@ -95,10 +96,11 @@ AND project does not suppress Email for this event
 AND task does not mute Email for this event
 ```
 
-設定會存放在 Kanboard metadata tables，不需要資料庫 schema migration：
+設定會存放在 Kanboard config 與 metadata tables，不需要資料庫 schema migration：
 
-| 設定 | Metadata table | Key 格式 |
+| 設定 | 儲存位置 | Key 格式 |
 | --- | --- | --- |
+| 全域預設 webhook | `settings` | `discord_default_webhook_url` |
 | 專案 Discord event | `project_has_metadata` | `discord_event_<event>` |
 | 專案 Email suppression | `project_has_metadata` | `discord_suppress_email_<event>` |
 | 任務 Discord mute | `task_has_metadata` | `discord_task_mute_discord_<event>` |

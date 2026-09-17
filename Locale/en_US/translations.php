@@ -12,8 +12,11 @@ return array(
         => 'Send rich Discord notifications per project and mention mapped Discord users',
     'Discord' => 'Discord',
     'Discord Webhook URL' => 'Discord Webhook URL',
-    'Create an Incoming Webhook in your Discord channel (Server Settings > Integrations > Webhooks) and paste the URL here. Leave empty to disable Discord notifications for this project.'
-        => 'Create an Incoming Webhook in your Discord channel (Server Settings > Integrations > Webhooks) and paste the URL here. Leave empty to disable Discord notifications for this project.',
+    'Create an Incoming Webhook in this project\'s Discord channel and paste the URL here. Leave empty to use the global default Discord webhook URL, when configured.'
+        => 'Create an Incoming Webhook in this project\'s Discord channel and paste the URL here. Leave empty to use the global default Discord webhook URL, when configured.',
+    'Default Discord Webhook URL' => 'Default Discord Webhook URL',
+    'Create an Incoming Webhook in your default Discord channel and paste the URL here. Projects without their own Discord webhook URL will send notifications to this webhook. Leave empty to require each project to configure its own webhook.'
+        => 'Create an Incoming Webhook in your default Discord channel and paste the URL here. Projects without their own Discord webhook URL will send notifications to this webhook. Leave empty to require each project to configure its own webhook.',
     'Content excerpt length' => 'Content excerpt length',
     'Maximum number of characters shown from task descriptions, comments and subtasks. The status line (who did what) is always shown in full. Leave empty for the default (280). Set 0 to hide content excerpts entirely.'
         => 'Maximum number of characters shown from task descriptions, comments and subtasks. The status line (who did what) is always shown in full. Leave empty for the default (280). Set 0 to hide content excerpts entirely.',

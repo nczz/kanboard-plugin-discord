@@ -18,7 +18,9 @@ as they have mapped their Discord User ID in their Kanboard profile.
 Features
 --------
 
-- Per-project routing: each project posts to its own Discord channel webhook.
+- Per-project routing with a global default webhook fallback: each project can
+  post to its own Discord channel, or inherit the system default webhook when no
+  project webhook is set.
 - Per-project notification matrix: for every supported event, choose whether to
   send Discord and whether to suppress Kanboard Email notifications.
 - Per-task notification rules: mute Discord and/or Email for selected event
@@ -66,15 +68,20 @@ ln -s /path/to/kanboard-plugin-discord plugins/Discord
 Configuration
 -------------
 
-### 1. Route a project to a Discord channel
+### 1. Route projects to Discord channels
 
 1. In Discord: **Server Settings > Integrations > Webhooks > New Webhook**,
-   pick the target channel, and copy the webhook URL.
-2. In Kanboard: open the project, go to **Settings > Integrations > Discord**,
-   paste the webhook URL and save.
+   pick the default target channel, and copy the webhook URL.
+2. In Kanboard: go to **Settings > Integrations > Discord**, paste the URL into
+   **Default Discord Webhook URL**, and save. Projects without their own webhook
+   will post to this fallback.
+3. Optional: open a project, go to **Project settings > Integrations > Discord**,
+   paste a project-specific webhook URL, and save. A project webhook always wins
+   over the global default.
 
-To send several projects to the same channel, paste the same webhook URL into
-each project.
+To send several projects to the same channel, leave their project webhook empty
+and use the global default webhook, or paste the same webhook URL into each
+project when you need explicit per-project settings.
 
 ### Event filtering and Email suppression
 
@@ -93,7 +100,7 @@ event has two independent project-level controls:
 
 | Layer | Discord decision | Email decision |
 | --- | --- | --- |
-| Project defaults | `Discord notification` decides whether this event can post to the project's webhook. | `Suppress Email` decides whether Kanboard Email delivery is blocked for this event. |
+| Project defaults | `Discord notification` decides whether this event can post to Discord. Project webhook URL is used first; if empty, the global default webhook URL is used. | `Suppress Email` decides whether Kanboard Email delivery is blocked for this event. |
 | Task exclusions | `Mute Discord` can only block a Discord event for this task. It cannot enable a project-disabled event. | `Mute Email` can only block Email delivery for this task. |
 | User preferences | The Discord user notification type only affects task-description @mention cards. Project cards still use project settings. | The user's Kanboard Email checkbox still applies. If Email is not selected, no Email is sent. |
 
@@ -103,7 +110,7 @@ The effective rules are:
 Discord sends when:
 project Discord event enabled
 AND task does not mute Discord for this event
-AND project webhook URL is valid
+AND (project webhook URL is valid OR project webhook is empty and global default webhook URL is valid)
 ```
 
 ```text
@@ -114,11 +121,12 @@ AND project does not suppress Email for this event
 AND task does not mute Email for this event
 ```
 
-Settings are stored in Kanboard metadata tables. No database schema migration is
-required:
+Settings are stored in Kanboard config and metadata tables. No database schema
+migration is required:
 
-| Setting | Metadata table | Key format |
+| Setting | Storage | Key format |
 | --- | --- | --- |
+| Global default webhook | `settings` | `discord_default_webhook_url` |
 | Project Discord event | `project_has_metadata` | `discord_event_<event>` |
 | Project Email suppression | `project_has_metadata` | `discord_suppress_email_<event>` |
 | Task Discord mute | `task_has_metadata` | `discord_task_mute_discord_<event>` |
