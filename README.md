@@ -86,6 +86,42 @@ event has two independent project-level controls:
 | On | On | Discord only |
 | Off | On | Muted for both Discord and Email |
 
+
+#### Routing model
+
+| Layer | Discord decision | Email decision |
+| --- | --- | --- |
+| Project defaults | `Discord notification` decides whether this event can post to the project's webhook. | `Suppress Email` decides whether Kanboard Email delivery is blocked for this event. |
+| Task exclusions | `Mute Discord` can only block a Discord event for this task. It cannot enable a project-disabled event. | `Mute Email` can only block Email delivery for this task. |
+| User preferences | The Discord user notification type only affects task-description @mention cards. Project cards still use project settings. | The user's Kanboard Email checkbox still applies. If Email is not selected, no Email is sent. |
+
+The effective rules are:
+
+```text
+Discord sends when:
+project Discord event enabled
+AND task does not mute Discord for this event
+AND project webhook URL is valid
+```
+
+```text
+Email sends when:
+user has Email notification type selected
+AND Kanboard's notification filter allows the event
+AND project does not suppress Email for this event
+AND task does not mute Email for this event
+```
+
+Settings are stored in Kanboard metadata tables. No database schema migration is
+required:
+
+| Setting | Metadata table | Key format |
+| --- | --- | --- |
+| Project Discord event | `project_has_metadata` | `discord_event_<event>` |
+| Project Email suppression | `project_has_metadata` | `discord_suppress_email_<event>` |
+| Task Discord mute | `task_has_metadata` | `discord_task_mute_discord_<event>` |
+| Task Email mute | `task_has_metadata` | `discord_task_mute_email_<event>` |
+
 Supported event rows:
 
 - Tasks: create, update, assignee change, close, reopen, overdue.
@@ -125,6 +161,17 @@ Email for the overdue tasks that are not suppressed.
 
 Open a task and choose **Notification rules** to mute Discord or Email for
 specific event types on that one task card.
+
+The modal uses the same event registry as the project settings page, with two
+task-only columns:
+
+| Column | Effect |
+| --- | --- |
+| Mute Discord | Skip this task for that Discord event. For overdue batches, only muted tasks are removed; other overdue tasks still post. |
+| Mute Email | Skip this task for that Email event. For overdue batches, only muted tasks are removed from the Email body. |
+
+Only users who can update the task can edit these rules. Saving the modal removes
+unchecked metadata instead of storing false values.
 
 Task rules only exclude notifications. They do not enable a Discord event that is
 disabled at the project level. Precedence is:
