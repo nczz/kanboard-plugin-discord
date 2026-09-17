@@ -17,8 +17,10 @@ Features
 --------
 
 - Per-project routing: each project posts to its own Discord channel webhook.
-- Per-project event filtering: choose which Kanboard event groups should be sent
-  to Discord so the channel stays focused on meaningful signals.
+- Per-project notification matrix: for every supported event, choose whether to
+  send Discord and whether to suppress Kanboard Email notifications.
+- Per-task notification rules: mute Discord and/or Email for selected event
+  types on a single task card without changing project defaults.
 - Rich embed cards with event-specific colors, the task link, assignee and column.
 - Discord mentions for the assignee on task lifecycle events.
 - Comment @mentions ping the mapped Discord users being mentioned on the comment
@@ -72,31 +74,67 @@ Configuration
 To send several projects to the same channel, paste the same webhook URL into
 each project.
 
-### Event filtering
+### Event filtering and Email suppression
 
-Under **Settings > Integrations > Discord > Discord notification events**, choose
-which event groups should be sent to Discord:
+Under **Settings > Integrations > Discord > Discord notification events**, each
+event has two independent project-level controls:
+
+| Discord notification | Suppress Email | Result |
+| --- | --- | --- |
+| Off | Off | Email only |
+| On | Off | Discord + Email |
+| On | On | Discord only |
+| Off | On | Muted for both Discord and Email |
+
+Supported event rows:
 
 - Tasks: create, update, assignee change, close, reopen, overdue.
-- Task moves: project, column, column position, swimlane. These are unchecked
+- Task moves: project, column, column position, swimlane. Discord is unchecked
   by default because board drag/reorder activity is usually noisy.
 - Comments: create, update, delete.
 - Subtasks: create, update, delete.
 - Files: attach, remove.
 - Internal links: create/update, remove.
-- Task description @mentions.
+- Mentions: task description @mentions and comment @mentions.
 
-Most supported events are enabled by default. Task move events are disabled by
-default until explicitly checked. Older coarse settings for close/open, assignee
-changes, internal links and task description mentions are still honored where
-they map cleanly to the split events; move events remain off unless their new
-individual move toggles are checked.
+Most Discord events are enabled by default. Task move Discord events are disabled
+until explicitly checked. Older coarse settings for close/open, assignee changes,
+internal links and task description mentions are still honored where they map
+cleanly to the split events; move events remain off unless their new individual
+move toggles are checked.
+
+Email suppression is a setting-based rule, not a Discord-success fallback. If
+**Suppress Email** is checked, Kanboard Email notifications for that event are
+not sent even if Discord delivery later fails. This plugin does not change each
+user's Email checkbox; it only suppresses delivery for matching events.
+
+Comment @mention Discord pings are handled by the **Comment created** card so the
+channel receives one complete card with the comment body. The **Comment
+@mentions** row controls Email mention suppression and does not create a separate
+Discord card.
 
 Overdue cards are emitted when Kanboard's `notification:overdue-tasks` command
 runs. Kanboard core routes overdue tasks through a command instead of regular
 project events; this plugin extends that command to send project Discord cards
 directly and de-duplicates them so the channel receives one card per overdue
-task even when several users or managers are notified by Kanboard.
+task even when several users or managers are notified by Kanboard. Email
+suppression for overdue tasks is applied per task, so mixed batches still send
+Email for the overdue tasks that are not suppressed.
+
+### Task-level notification rules
+
+Open a task and choose **Notification rules** to mute Discord or Email for
+specific event types on that one task card.
+
+Task rules only exclude notifications. They do not enable a Discord event that is
+disabled at the project level. Precedence is:
+
+1. Task-level mute rules win.
+2. Project-level Discord and Suppress Email rules apply next.
+3. Kanboard user notification preferences still apply for Email.
+
+The plugin does not suppress Kanboard Web notifications and does not affect
+manual **Send by email** actions; it only changes Kanboard notification events.
 
 ### Card layout and content length
 

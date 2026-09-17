@@ -53,7 +53,12 @@ class DiscordNotification extends Base implements NotificationInterface
     /**
      * Project metadata prefix for per-event Discord delivery toggles.
      */
-    const META_EVENT_PREFIX = 'discord_event_';
+    const META_EVENT_PREFIX = EventRegistry::META_DISCORD_EVENT_PREFIX;
+
+    /**
+     * Project metadata prefix for per-event Email suppression toggles.
+     */
+    const META_SUPPRESS_EMAIL_PREFIX = EventRegistry::META_SUPPRESS_EMAIL_PREFIX;
 
     /**
      * Per-process overdue de-duplication. Kanboard core can notify several
@@ -72,43 +77,7 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     public static function getEventGroups()
     {
-        return array(
-            t('Tasks') => array(
-                'task_create' => t('Task created'),
-                'task_update' => t('Task updated'),
-                'task_assignee_change' => t('Task assignee changed'),
-                'task_close' => t('Task closed'),
-                'task_open' => t('Task reopened'),
-                'task_overdue' => t('Task overdue'),
-            ),
-            t('Task moves') => array(
-                'task_move_project' => t('Task moved to another project'),
-                'task_move_column' => t('Task moved to another column'),
-                'task_move_position' => t('Task reordered in a column'),
-                'task_move_swimlane' => t('Task moved to another swimlane'),
-            ),
-            t('Comments') => array(
-                'comment_create' => t('Comment created'),
-                'comment_update' => t('Comment updated'),
-                'comment_delete' => t('Comment deleted'),
-            ),
-            t('Subtasks') => array(
-                'subtask_create' => t('Subtask created'),
-                'subtask_update' => t('Subtask updated'),
-                'subtask_delete' => t('Subtask deleted'),
-            ),
-            t('Files') => array(
-                'file_create' => t('File attached'),
-                'file_delete' => t('File removed'),
-            ),
-            t('Internal links') => array(
-                'task_link_create_update' => t('Task internal link created or updated'),
-                'task_link_delete' => t('Task internal link removed'),
-            ),
-            t('Mentions') => array(
-                'task_mention' => t('Task description @mentions'),
-            ),
-        );
+        return EventRegistry::getEventGroups();
     }
 
     /**
@@ -120,7 +89,19 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     public static function getEventMetadataKey($key)
     {
-        return self::META_EVENT_PREFIX.$key;
+        return EventRegistry::getDiscordProjectMetadataKey($key);
+    }
+
+    /**
+     * Build project metadata key for an Email suppression option.
+     *
+     * @access public
+     * @param  string $key
+     * @return string
+     */
+    public static function getSuppressEmailMetadataKey($key)
+    {
+        return EventRegistry::getSuppressEmailProjectMetadataKey($key);
     }
 
     /**
@@ -132,11 +113,11 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     public static function isEventDefaultEnabled($key)
     {
-        return strpos($key, 'task_move_') !== 0;
+        return EventRegistry::isDiscordEventDefaultEnabled($key);
     }
 
     /**
-     * Resolve a toggle value from project metadata for templates and delivery.
+     * Resolve a Discord toggle value from project metadata.
      *
      * @access public
      * @param  string $key
@@ -145,37 +126,20 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     public static function isEventMetadataEnabled($key, array $metadata)
     {
-        $metadataKey = self::getEventMetadataKey($key);
-        if (array_key_exists($metadataKey, $metadata)) {
-            return (string) $metadata[$metadataKey] === '1';
-        }
-
-        $legacyKey = self::getLegacyEventKey($key);
-        if ($legacyKey !== '') {
-            $legacyMetadataKey = self::getEventMetadataKey($legacyKey);
-            if (array_key_exists($legacyMetadataKey, $metadata)) {
-                return (string) $metadata[$legacyMetadataKey] === '1';
-            }
-        }
-
-        return self::isEventDefaultEnabled($key);
+        return EventRegistry::isDiscordProjectEventEnabled($key, $metadata);
     }
 
     /**
-     * Flat list of event-toggle keys.
+     * Resolve an Email suppression value from project metadata.
      *
-     * @access protected
-     * @return string[]
+     * @access public
+     * @param  string $key
+     * @param  array  $metadata
+     * @return boolean
      */
-    protected static function getEventKeys()
+    public static function isEmailSuppressedMetadataEnabled($key, array $metadata)
     {
-        $keys = array();
-
-        foreach (self::getEventGroups() as $options) {
-            $keys = array_merge($keys, array_keys($options));
-        }
-
-        return $keys;
+        return EventRegistry::isProjectEmailSuppressed($key, $metadata);
     }
 
     /**
@@ -215,6 +179,10 @@ class DiscordNotification extends Base implements NotificationInterface
         $projectId = (int) $eventData['task']['project_id'];
 
         if (! $this->isEventEnabled($projectId, $eventName)) {
+            return;
+        }
+
+        if ($this->isTaskMuted($eventName, $eventData['task'])) {
             return;
         }
 
@@ -270,6 +238,10 @@ class DiscordNotification extends Base implements NotificationInterface
                 $projectId = (int) $task['project_id'];
                 $taskKey = $this->getOverdueTaskKey($task);
                 if (isset(self::$sentOverdueTaskKeys[$taskKey]) || isset($queuedOverdueTaskKeys[$taskKey])) {
+                    continue;
+                }
+
+                if ($this->isTaskMuted(TaskModel::EVENT_OVERDUE, $task)) {
                     continue;
                 }
 
@@ -346,6 +318,10 @@ class DiscordNotification extends Base implements NotificationInterface
         // EVENT_OVERDUE carries a list of tasks instead of a single task.
         if ($eventName === TaskModel::EVENT_OVERDUE && ! empty($eventData['tasks'])) {
             foreach ($eventData['tasks'] as $task) {
+                if ($this->isTaskMuted($eventName, $task)) {
+                    continue;
+                }
+
                 $singleEvent = $eventData;
                 $singleEvent['task'] = $task;
                 // Reduce the tasks list to this single task so the core title
@@ -355,6 +331,10 @@ class DiscordNotification extends Base implements NotificationInterface
                 $mention = $this->buildMention($this->getAssigneeId($task));
                 $this->send($webhook, $project, $eventName, $singleEvent, $mention);
             }
+            return;
+        }
+
+        if (! empty($eventData['task']) && $this->isTaskMuted($eventName, $eventData['task'])) {
             return;
         }
 
@@ -460,13 +440,13 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     protected function isEventEnabled($projectId, $eventName)
     {
-        $eventKey = $this->getEventKey($eventName);
+        $eventKey = EventRegistry::getEventKey($eventName);
 
         if ($eventKey === '') {
             return false;
         }
 
-        return self::isEventMetadataEnabled($eventKey, $this->projectMetadataModel->getAll($projectId));
+        return EventRegistry::isDiscordProjectEventEnabled($eventKey, $this->projectMetadataModel->getAll($projectId));
     }
 
     /**
@@ -478,82 +458,29 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     protected function getEventKey($eventName)
     {
-        switch ($eventName) {
-            case TaskModel::EVENT_CREATE:
-                return 'task_create';
-            case TaskModel::EVENT_UPDATE:
-            case TaskModel::EVENT_CREATE_UPDATE:
-                return 'task_update';
-            case TaskModel::EVENT_ASSIGNEE_CHANGE:
-                return 'task_assignee_change';
-            case TaskModel::EVENT_MOVE_PROJECT:
-                return 'task_move_project';
-            case TaskModel::EVENT_MOVE_COLUMN:
-                return 'task_move_column';
-            case TaskModel::EVENT_MOVE_POSITION:
-                return 'task_move_position';
-            case TaskModel::EVENT_MOVE_SWIMLANE:
-                return 'task_move_swimlane';
-            case TaskModel::EVENT_CLOSE:
-                return 'task_close';
-            case TaskModel::EVENT_OPEN:
-                return 'task_open';
-            case TaskModel::EVENT_OVERDUE:
-                return 'task_overdue';
-            case CommentModel::EVENT_CREATE:
-                return 'comment_create';
-            case CommentModel::EVENT_UPDATE:
-                return 'comment_update';
-            case CommentModel::EVENT_DELETE:
-                return 'comment_delete';
-            case SubtaskModel::EVENT_CREATE:
-                return 'subtask_create';
-            case SubtaskModel::EVENT_UPDATE:
-            case SubtaskModel::EVENT_CREATE_UPDATE:
-                return 'subtask_update';
-            case SubtaskModel::EVENT_DELETE:
-                return 'subtask_delete';
-            case TaskFileModel::EVENT_CREATE:
-                return 'file_create';
-            case TaskFileModel::EVENT_DESTROY:
-                return 'file_delete';
-            case TaskLinkModel::EVENT_CREATE_UPDATE:
-                return 'task_link_create_update';
-            case TaskLinkModel::EVENT_DELETE:
-                return 'task_link_delete';
-            case TaskModel::EVENT_USER_MENTION:
-                return 'task_mention';
-            case CommentModel::EVENT_USER_MENTION:
-                return 'comment_mention';
-            default:
-                return '';
-        }
+        return EventRegistry::getEventKey($eventName);
     }
 
     /**
-     * Map split event-toggle keys back to the coarse keys used by earlier
-     * plugin versions.
+     * Whether Discord is muted for this task and event.
      *
      * @access protected
-     * @param  string $eventKey
-     * @return string
+     * @param  string $eventName
+     * @param  array  $task
+     * @return boolean
      */
-    protected static function getLegacyEventKey($eventKey)
+    protected function isTaskMuted($eventName, array $task)
     {
-        switch ($eventKey) {
-            case 'task_assignee_change':
-                return 'task_update';
-            case 'task_close':
-            case 'task_open':
-                return 'task_close_open';
-            case 'task_link_create_update':
-            case 'task_link_delete':
-                return 'task_link';
-            case 'task_mention':
-                return 'mention';
-            default:
-                return '';
+        if (empty($task['id'])) {
+            return false;
         }
+
+        $eventKey = EventRegistry::getEventKey($eventName);
+        if ($eventKey === '') {
+            return false;
+        }
+
+        return EventRegistry::isTaskDiscordMuted($eventKey, $this->taskMetadataModel->getAll((int) $task['id']));
     }
 
     /**

@@ -9,6 +9,9 @@ use Kanboard\Model\ProjectUserRoleModel;
 use Kanboard\Model\TaskCreationModel;
 use Kanboard\Model\UserModel;
 use Kanboard\Plugin\Discord\Notification\DiscordNotification;
+use Kanboard\Notification\MailNotification;
+use Kanboard\Plugin\Discord\Notification\ConditionalMailNotification;
+use Kanboard\Plugin\Discord\Notification\EventRegistry;
 use Kanboard\Plugin\Discord\Plugin;
 
 /**
@@ -35,6 +38,52 @@ class DiscordNotificationTest extends Base
         return $this->container['httpClient'];
     }
 
+    private function mockEmail()
+    {
+        $this->container['emailClient'] = $this
+            ->getMockBuilder('\Kanboard\Core\Mail\Client')
+            ->setConstructorArgs(array($this->container))
+            ->onlyMethods(array('send', 'getAvailableTransports'))
+            ->getMock();
+        $this->container['emailClient']->method('getAvailableTransports')->willReturn(array('mail' => 'mail'));
+        return $this->container['emailClient'];
+    }
+
+    private function emailUser()
+    {
+        return array(
+            'id' => 1000,
+            'username' => 'email-user',
+            'name' => 'Email User',
+            'email' => 'email-user@example.com',
+        );
+    }
+
+    private function taskUpdateEvent($projectId, $taskId = 501)
+    {
+        return array(
+            'task' => array(
+                'id' => $taskId,
+                'project_id' => $projectId,
+                'project_name' => 'Notification Matrix',
+                'title' => 'Updated task',
+                'owner_id' => 0,
+            ),
+            'changes' => array('title' => 'Updated task'),
+        );
+    }
+
+    private function createTask($projectId, $title = 'Task', array $values = array())
+    {
+        $taskCreationModel = new TaskCreationModel($this->container);
+        $taskId = $taskCreationModel->create($values + array(
+            'project_id' => $projectId,
+            'title' => $title,
+        ));
+        $this->assertNotFalse($taskId);
+        return $taskId;
+    }
+
     public function testPluginRegistersDiscordType()
     {
         $this->loadPlugin();
@@ -43,6 +92,228 @@ class DiscordNotificationTest extends Base
 
         $userTypes = $this->container['userNotificationTypeModel']->getTypes();
         $this->assertArrayHasKey(DiscordNotification::TYPE, $userTypes);
+    }
+
+    public function testPluginOverridesEmailTypeWithConditionalWrapper()
+    {
+        $this->loadPlugin();
+
+        $this->assertInstanceOf(
+            ConditionalMailNotification::class,
+            $this->container['userNotificationTypeModel']->getType(MailNotification::TYPE)
+        );
+    }
+
+    public function testProjectEmailSuppressionOffAllowsEmail()
+    {
+        $this->loadPlugin();
+        $email = $this->mockEmail();
+        $email->expects($this->once())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'email-on'));
+
+        $notification = new ConditionalMailNotification($this->container);
+        $notification->notifyUser(
+            $this->emailUser(),
+            \Kanboard\Model\TaskModel::EVENT_UPDATE,
+            $this->taskUpdateEvent($projectId)
+        );
+    }
+
+    public function testProjectEmailSuppressionOnBlocksEmail()
+    {
+        $this->loadPlugin();
+        $email = $this->mockEmail();
+        $email->expects($this->never())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'email-off'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            EventRegistry::getSuppressEmailProjectMetadataKey('task_update') => '1',
+        ));
+
+        $notification = new ConditionalMailNotification($this->container);
+        $notification->notifyUser(
+            $this->emailUser(),
+            \Kanboard\Model\TaskModel::EVENT_UPDATE,
+            $this->taskUpdateEvent($projectId)
+        );
+    }
+
+    public function testDiscordOffAndEmailSuppressionOffKeepsEmailOnly()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+        $email = $this->mockEmail();
+        $email->expects($this->once())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'email-only'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('task_update') => '0',
+        ));
+        $eventData = $this->taskUpdateEvent($projectId);
+
+        $discord = new DiscordNotification($this->container);
+        $discord->notifyProject($projectModel->getById($projectId), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+
+        $emailNotification = new ConditionalMailNotification($this->container);
+        $emailNotification->notifyUser($this->emailUser(), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+    }
+
+    public function testDiscordOnAndEmailSuppressionOnSendsDiscordOnly()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->once())->method('postJson');
+        $email = $this->mockEmail();
+        $email->expects($this->never())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'discord-only'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('task_update') => '1',
+            EventRegistry::getSuppressEmailProjectMetadataKey('task_update') => '1',
+        ));
+        $eventData = $this->taskUpdateEvent($projectId);
+
+        $discord = new DiscordNotification($this->container);
+        $discord->notifyProject($projectModel->getById($projectId), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+
+        $emailNotification = new ConditionalMailNotification($this->container);
+        $emailNotification->notifyUser($this->emailUser(), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+    }
+
+    public function testDiscordOffAndEmailSuppressionOnMutesBoth()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+        $email = $this->mockEmail();
+        $email->expects($this->never())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'mute-both'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('task_update') => '0',
+            EventRegistry::getSuppressEmailProjectMetadataKey('task_update') => '1',
+        ));
+        $eventData = $this->taskUpdateEvent($projectId);
+
+        $discord = new DiscordNotification($this->container);
+        $discord->notifyProject($projectModel->getById($projectId), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+
+        $emailNotification = new ConditionalMailNotification($this->container);
+        $emailNotification->notifyUser($this->emailUser(), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+    }
+
+    public function testOverdueEmailSuppressionFiltersMixedProjectTasks()
+    {
+        $this->loadPlugin();
+        $email = $this->mockEmail();
+
+        $projectModel = new ProjectModel($this->container);
+        $mutedProjectId = $projectModel->create(array('name' => 'muted-overdue-email'));
+        $allowedProjectId = $projectModel->create(array('name' => 'allowed-overdue-email'));
+        $this->container['projectMetadataModel']->save($mutedProjectId, array(
+            EventRegistry::getSuppressEmailProjectMetadataKey('task_overdue') => '1',
+        ));
+
+        $capturedHtml = '';
+        $email->expects($this->once())->method('send')
+            ->willReturnCallback(function ($to, $name, $subject, $html) use (&$capturedHtml) {
+                $capturedHtml = $html;
+                return null;
+            });
+
+        $notification = new ConditionalMailNotification($this->container);
+        $notification->notifyUser(
+            $this->emailUser(),
+            \Kanboard\Model\TaskModel::EVENT_OVERDUE,
+            array('tasks' => array(
+                array('id' => 601, 'project_id' => $mutedProjectId, 'project_name' => 'muted-overdue-email', 'title' => 'Suppressed late', 'date_due' => time() - 3600),
+                array('id' => 602, 'project_id' => $allowedProjectId, 'project_name' => 'allowed-overdue-email', 'title' => 'Allowed late', 'date_due' => time() - 1800),
+            ), 'project_name' => 'mixed')
+        );
+
+        $this->assertStringContainsString('Allowed late', $capturedHtml);
+        $this->assertStringNotContainsString('Suppressed late', $capturedHtml);
+    }
+
+    public function testCommentMentionEmailSuppressionDoesNotSendEmail()
+    {
+        $this->loadPlugin();
+        $email = $this->mockEmail();
+        $email->expects($this->never())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'comment-mention-email-off'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            EventRegistry::getSuppressEmailProjectMetadataKey('comment_mention') => '1',
+        ));
+
+        $notification = new ConditionalMailNotification($this->container);
+        $notification->notifyUser(
+            $this->emailUser(),
+            \Kanboard\Model\CommentModel::EVENT_USER_MENTION,
+            array(
+                'task' => array('id' => 603, 'project_id' => $projectId, 'project_name' => 'comment-mention-email-off', 'title' => 'Mention task'),
+                'comment' => array('comment' => 'hello @email-user', 'task_id' => 603),
+            )
+        );
+    }
+
+    public function testTaskMentionEmailSuppressionDoesNotSendEmail()
+    {
+        $this->loadPlugin();
+        $email = $this->mockEmail();
+        $email->expects($this->never())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'task-mention-email-off'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            EventRegistry::getSuppressEmailProjectMetadataKey('task_mention') => '1',
+        ));
+
+        $notification = new ConditionalMailNotification($this->container);
+        $notification->notifyUser(
+            $this->emailUser(),
+            \Kanboard\Model\TaskModel::EVENT_USER_MENTION,
+            array(
+                'task' => array('id' => 604, 'project_id' => $projectId, 'project_name' => 'task-mention-email-off', 'title' => 'Mention task', 'description' => 'hello @email-user'),
+            )
+        );
+    }
+
+    public function testUserWithoutEmailNotificationTypeDoesNotReceiveEmail()
+    {
+        $this->loadPlugin();
+        $email = $this->mockEmail();
+        $email->expects($this->never())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectUserRoleModel = new ProjectUserRoleModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'email-optout'));
+        $userId = $userModel->create(array(
+            'username' => 'email-optout',
+            'name' => 'Email Optout',
+            'email' => 'optout@example.com',
+            'notifications_enabled' => 1,
+        ));
+        $projectUserRoleModel->addUser($projectId, $userId, Role::PROJECT_MEMBER);
+        $this->container['userNotificationTypeModel']->saveSelectedTypes($userId, array());
+
+        $this->container['userNotificationModel']->sendUserNotification(
+            $userModel->getById($userId),
+            \Kanboard\Model\TaskModel::EVENT_UPDATE,
+            $this->taskUpdateEvent($projectId, 605)
+        );
     }
 
     public function testPluginOverridesOverdueCommandForProjectDiscordCards()
@@ -138,6 +409,161 @@ class DiscordNotificationTest extends Base
             \Kanboard\Model\TaskModel::EVENT_CREATE,
             array('task' => array('id' => 1, 'project_id' => $projectId, 'project_name' => 'no-webhook', 'title' => 'x', 'owner_id' => 0))
         );
+    }
+
+    public function testTaskMuteDiscordDoesNotMuteEmail()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+        $email = $this->mockEmail();
+        $email->expects($this->once())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'task-mute-discord'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('task_update') => '1',
+        ));
+        $taskId = $this->createTask($projectId, 'Task mute Discord');
+        $this->container['taskMetadataModel']->save($taskId, array(
+            EventRegistry::getTaskMuteDiscordMetadataKey('task_update') => '1',
+        ));
+        $eventData = $this->taskUpdateEvent($projectId, $taskId);
+
+        $discord = new DiscordNotification($this->container);
+        $discord->notifyProject($projectModel->getById($projectId), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+
+        $emailNotification = new ConditionalMailNotification($this->container);
+        $emailNotification->notifyUser($this->emailUser(), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+    }
+
+    public function testTaskMuteEmailDoesNotMuteDiscord()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->once())->method('postJson');
+        $email = $this->mockEmail();
+        $email->expects($this->never())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'task-mute-email'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('task_update') => '1',
+        ));
+        $taskId = $this->createTask($projectId, 'Task mute Email');
+        $this->container['taskMetadataModel']->save($taskId, array(
+            EventRegistry::getTaskMuteEmailMetadataKey('task_update') => '1',
+        ));
+        $eventData = $this->taskUpdateEvent($projectId, $taskId);
+
+        $discord = new DiscordNotification($this->container);
+        $discord->notifyProject($projectModel->getById($projectId), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+
+        $emailNotification = new ConditionalMailNotification($this->container);
+        $emailNotification->notifyUser($this->emailUser(), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+    }
+
+    public function testTaskMuteBothMutesDiscordAndEmail()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+        $email = $this->mockEmail();
+        $email->expects($this->never())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'task-mute-both'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('task_update') => '1',
+        ));
+        $taskId = $this->createTask($projectId, 'Task mute both');
+        $this->container['taskMetadataModel']->save($taskId, array(
+            EventRegistry::getTaskMuteDiscordMetadataKey('task_update') => '1',
+            EventRegistry::getTaskMuteEmailMetadataKey('task_update') => '1',
+        ));
+        $eventData = $this->taskUpdateEvent($projectId, $taskId);
+
+        $discord = new DiscordNotification($this->container);
+        $discord->notifyProject($projectModel->getById($projectId), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+
+        $emailNotification = new ConditionalMailNotification($this->container);
+        $emailNotification->notifyUser($this->emailUser(), \Kanboard\Model\TaskModel::EVENT_UPDATE, $eventData);
+    }
+
+    public function testTaskRulesDoNotEnableDisabledProjectDiscordEvent()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'project-disabled-stays-disabled'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('task_update') => '0',
+        ));
+
+        $discord = new DiscordNotification($this->container);
+        $discord->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\TaskModel::EVENT_UPDATE,
+            $this->taskUpdateEvent($projectId, 704)
+        );
+    }
+
+    public function testOverdueTaskMuteFiltersDiscordAndEmailPerTask()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $email = $this->mockEmail();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'overdue-task-mute'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+        $mutedTaskId = $this->createTask($projectId, 'Muted overdue', array('date_due' => time() - 7200));
+        $allowedTaskId = $this->createTask($projectId, 'Allowed overdue', array('date_due' => time() - 3600));
+        $this->container['taskMetadataModel']->save($mutedTaskId, array(
+            EventRegistry::getTaskMuteDiscordMetadataKey('task_overdue') => '1',
+            EventRegistry::getTaskMuteEmailMetadataKey('task_overdue') => '1',
+        ));
+
+        $postedTitles = array();
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$postedTitles) {
+                $postedTitles[] = $payload['embeds'][0]['title'];
+                return '';
+            });
+
+        $capturedHtml = '';
+        $email->expects($this->once())->method('send')
+            ->willReturnCallback(function ($to, $name, $subject, $html) use (&$capturedHtml) {
+                $capturedHtml = $html;
+                return null;
+            });
+
+        $tasks = array(
+            array('id' => $mutedTaskId, 'project_id' => $projectId, 'project_name' => 'overdue-task-mute', 'title' => 'Muted overdue', 'date_due' => time() - 7200, 'owner_id' => 0),
+            array('id' => $allowedTaskId, 'project_id' => $projectId, 'project_name' => 'overdue-task-mute', 'title' => 'Allowed overdue', 'date_due' => time() - 3600, 'owner_id' => 0),
+        );
+
+        $discord = new DiscordNotification($this->container);
+        $discord->sendOverdueTaskNotifications($tasks);
+
+        $emailNotification = new ConditionalMailNotification($this->container);
+        $emailNotification->notifyUser($this->emailUser(), \Kanboard\Model\TaskModel::EVENT_OVERDUE, array(
+            'tasks' => $tasks,
+            'project_name' => 'overdue-task-mute',
+        ));
+
+        $this->assertCount(1, $postedTitles);
+        $this->assertStringContainsString('Allowed overdue', $postedTitles[0]);
+        $this->assertStringContainsString('Allowed overdue', $capturedHtml);
+        $this->assertStringNotContainsString('Muted overdue', $capturedHtml);
     }
 
     public function testEventFilterBlocksDisabledProjectEvent()

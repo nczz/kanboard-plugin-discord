@@ -27,6 +27,10 @@ return array(
     'Discord notification events' => 'Discord notification events',
     'Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.'
         => 'Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.',
+    'Choose which Kanboard events should be sent to Discord and which Email notifications should be suppressed.'
+        => 'Choose which Kanboard events should be sent to Discord and which Email notifications should be suppressed.',
+    'Suppressing Email does not require Discord to be enabled. If Discord is also disabled, the event is muted for both Discord and Email.'
+        => 'Suppressing Email does not require Discord to be enabled. If Discord is also disabled, the event is muted for both Discord and Email.',
     'Task created' => 'Task created',
     'Task updated' => 'Task updated',
     'Task assignee changed' => 'Task assignee changed',
@@ -52,6 +56,17 @@ return array(
     'Task internal link removed' => 'Task internal link removed',
     'Mentions' => 'Mentions',
     'Task description @mentions' => 'Task description @mentions',
+    'Comment @mentions' => 'Comment @mentions',
+    'Event' => 'Event',
+    'Discord notification' => 'Discord notification',
+    'Suppress Email' => 'Suppress Email',
+    'Handled by comment cards' => 'Handled by comment cards',
+    'Notification rules' => 'Notification rules',
+    'These settings only mute notifications for this task. They do not enable events that are disabled at project level.'
+        => 'These settings only mute notifications for this task. They do not enable events that are disabled at project level.',
+    'Mute Discord' => 'Mute Discord',
+    'Mute Email' => 'Mute Email',
+    'Task notification rules updated successfully.' => 'Task notification rules updated successfully.',
     'Assignee' => 'Assignee',
     'Column' => 'Column',
     'Changed' => 'Changed',

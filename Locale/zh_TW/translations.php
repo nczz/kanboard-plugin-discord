@@ -19,6 +19,10 @@ return array(
     'Discord notification events' => 'Discord 通知事件',
     'Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.'
         => '選擇哪些 Kanboard 事件要送到 Discord。任務移動通知預設不勾選，因為拖曳和排序活動通常較吵。',
+    'Choose which Kanboard events should be sent to Discord and which Email notifications should be suppressed.'
+        => '選擇哪些 Kanboard 事件要送到 Discord，以及哪些 Email 通知要被抑制。',
+    'Suppressing Email does not require Discord to be enabled. If Discord is also disabled, the event is muted for both Discord and Email.'
+        => '抑制 Email 不需要啟用 Discord。如果 Discord 也關閉，這個事件就會同時對 Discord 與 Email 靜音。',
     'Task created' => '建立任務',
     'Task updated' => '更新任務',
     'Task assignee changed' => '變更任務負責人',
@@ -44,6 +48,17 @@ return array(
     'Task internal link removed' => '移除任務內部連結',
     'Mentions' => '提及',
     'Task description @mentions' => '任務描述 @提及',
+    'Comment @mentions' => '留言 @提及',
+    'Event' => '事件',
+    'Discord notification' => 'Discord 通知',
+    'Suppress Email' => '抑制 Email',
+    'Handled by comment cards' => '由留言卡片處理',
+    'Notification rules' => '通知規則',
+    'These settings only mute notifications for this task. They do not enable events that are disabled at project level.'
+        => '這些設定只會針對此任務排除通知，不會啟用專案層已關閉的事件。',
+    'Mute Discord' => '排除 Discord',
+    'Mute Email' => '排除 Email',
+    'Task notification rules updated successfully.' => '任務通知規則已更新。',
     'Assignee' => '負責人',
     'Column' => '欄位',
     'Changed' => '變更欄位',

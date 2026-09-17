@@ -1,7 +1,7 @@
 <div class="panel">
     <h3><?= t('Discord') ?></h3>
     <?php
-        $discordEventGroups = \Kanboard\Plugin\Discord\Notification\DiscordNotification::getEventGroups();
+        $discordEventGroups = \Kanboard\Plugin\Discord\Notification\EventRegistry::getEventGroups();
     ?>
 
 
@@ -21,19 +21,42 @@
     <fieldset>
         <legend><?= t('Discord notification events') ?></legend>
         <p class="form-help">
-            <?= t('Choose which Kanboard events should be sent to Discord. Task move notifications are off by default because drag/reorder activity is often noisy.') ?>
+            <?= t('Choose which Kanboard events should be sent to Discord and which Email notifications should be suppressed.') ?>
+            <?= t('Suppressing Email does not require Discord to be enabled. If Discord is also disabled, the event is muted for both Discord and Email.') ?>
         </p>
 
         <?php foreach ($discordEventGroups as $discordEventGroup => $discordEventOptions): ?>
             <h4><?= $this->text->e($discordEventGroup) ?></h4>
-            <?php foreach ($discordEventOptions as $discordEventKey => $discordEventLabel): ?>
-                <?php
-                    $discordEventMetadataKey = \Kanboard\Plugin\Discord\Notification\DiscordNotification::getEventMetadataKey($discordEventKey);
-                    $discordEventChecked = \Kanboard\Plugin\Discord\Notification\DiscordNotification::isEventMetadataEnabled($discordEventKey, $values);
-                ?>
-                <input type="hidden" name="<?= $discordEventMetadataKey ?>" value="0">
-                <?= $this->form->checkbox($discordEventMetadataKey, $discordEventLabel, '1', $discordEventChecked) ?><br>
-            <?php endforeach ?>
+            <table class="table-small">
+                <tr>
+                    <th><?= t('Event') ?></th>
+                    <th><?= t('Discord notification') ?></th>
+                    <th><?= t('Suppress Email') ?></th>
+                </tr>
+                <?php foreach ($discordEventOptions as $discordEventKey => $discordEventLabel): ?>
+                    <?php
+                        $discordEventMetadataKey = \Kanboard\Plugin\Discord\Notification\EventRegistry::getDiscordProjectMetadataKey($discordEventKey);
+                        $discordEventChecked = \Kanboard\Plugin\Discord\Notification\EventRegistry::isDiscordProjectEventEnabled($discordEventKey, $values);
+                        $discordSuppressEmailMetadataKey = \Kanboard\Plugin\Discord\Notification\EventRegistry::getSuppressEmailProjectMetadataKey($discordEventKey);
+                        $discordSuppressEmailChecked = \Kanboard\Plugin\Discord\Notification\EventRegistry::isProjectEmailSuppressed($discordEventKey, $values);
+                    ?>
+                    <tr>
+                        <td><?= $this->text->e($discordEventLabel) ?></td>
+                        <td>
+                            <?php if (\Kanboard\Plugin\Discord\Notification\EventRegistry::supportsDiscordProjectEvent($discordEventKey)): ?>
+                                <input type="hidden" name="<?= $discordEventMetadataKey ?>" value="0">
+                                <?= $this->form->checkbox($discordEventMetadataKey, '', '1', $discordEventChecked) ?>
+                            <?php else: ?>
+                                <?= t('Handled by comment cards') ?>
+                            <?php endif ?>
+                        </td>
+                        <td>
+                            <input type="hidden" name="<?= $discordSuppressEmailMetadataKey ?>" value="0">
+                            <?= $this->form->checkbox($discordSuppressEmailMetadataKey, '', '1', $discordSuppressEmailChecked) ?>
+                        </td>
+                    </tr>
+                <?php endforeach ?>
+            </table>
         <?php endforeach ?>
     </fieldset>
 

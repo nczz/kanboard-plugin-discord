@@ -7,6 +7,7 @@ use Kanboard\Core\Translator;
 use Kanboard\Plugin\Discord\Console\TaskOverdueNotificationCommand;
 use Kanboard\Plugin\Discord\Notification\DiscordNotification;
 use Kanboard\Model\UserModel;
+use Kanboard\Notification\MailNotification;
 
 /**
  * Discord Plugin
@@ -64,6 +65,15 @@ class Plugin extends Base
             '\Kanboard\Plugin\Discord\Notification\DiscordNotification'
         );
 
+        // Keep Kanboard's Email notification type selected exactly as users
+        // configured it, but route delivery through the plugin wrapper so
+        // project/task notification rules can suppress specific Email events.
+        $this->userNotificationTypeModel->setType(
+            MailNotification::TYPE,
+            t('Email'),
+            '\Kanboard\Plugin\Discord\Notification\ConditionalMailNotification'
+        );
+
         $this->enableDefaultUserNotifications();
 
         // Kanboard core sends overdue tasks only from the CLI command through
@@ -83,6 +93,11 @@ class Plugin extends Base
         // the official user integrations hook. Kanboard stores the submitted
         // fields into user_has_metadata automatically.
         $this->template->hook->attach('template:user:integrations', 'discord:user/integration');
+
+        // Add a task-level notification rule editor without changing Kanboard's
+        // task schema. Rules are persisted in task_has_metadata.
+        $this->template->hook->attach('template:task:sidebar:after-basic-actions', 'discord:task/notification_rules_link');
+        $this->template->hook->attach('template:task:dropdown:after-basic-actions', 'discord:task/notification_rules_link');
 
         // Note: no CSP changes required. Discord webhooks are invoked server-side
         // via the Kanboard HTTP client, and the default img-src policy ('*') already
