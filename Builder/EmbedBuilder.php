@@ -537,9 +537,9 @@ class EmbedBuilder extends Base
      * Build the top-level Discord message content.
      *
      * Comment creation is special: Discord renders top-level content in channel
-     * previews and push notifications more directly than embed text, so include
-     * the sanitized comment body next to the explicit mention list. The embed
-     * still carries task/project context.
+     * previews and push notifications more directly than embed text. The
+     * notification layer passes Kanboard comment text with resolvable @username
+     * tokens already replaced inline by Discord mentions.
      *
      * @access protected
      * @param  string $eventName
@@ -549,23 +549,8 @@ class EmbedBuilder extends Base
      */
     protected function getMessageContent($eventName, array $eventData, array $messageContext)
     {
-        $mentionContent = isset($messageContext['content']) ? trim((string) $messageContext['content']) : '';
-
-        if ($eventName !== CommentModel::EVENT_CREATE || empty($eventData['comment']['comment'])) {
-            return $this->truncate($mentionContent, self::LIMIT_CONTENT);
-        }
-
-        $comment = '💬 '.$this->sanitizeContentText($eventData['comment']['comment']);
-        if ($mentionContent === '') {
-            return $this->truncate($comment, self::LIMIT_CONTENT);
-        }
-
-        $remaining = self::LIMIT_CONTENT - mb_strlen($mentionContent) - 1;
-        if ($remaining <= 0) {
-            return $this->truncate($mentionContent, self::LIMIT_CONTENT);
-        }
-
-        return $mentionContent."\n".$this->truncate($comment, $remaining);
+        $content = isset($messageContext['content']) ? (string) $messageContext['content'] : '';
+        return $this->truncate($content, self::LIMIT_CONTENT);
     }
 
     /**
@@ -597,22 +582,6 @@ class EmbedBuilder extends Base
         }
 
         return array('parse' => array());
-    }
-
-    /**
-     * Sanitize user-generated text for top-level Discord message content.
-     *
-     * allowed_mentions is the ping guard. This method handles display hardening:
-     * decode Kanboard HTML entities and escape Discord markdown so the comment is
-     * readable as text instead of formatting the notification.
-     *
-     * @access protected
-     * @param  string $text
-     * @return string
-     */
-    protected function sanitizeContentText($text)
-    {
-        return $this->escapeMarkdown($this->decodeEntities($text));
     }
 
     /**

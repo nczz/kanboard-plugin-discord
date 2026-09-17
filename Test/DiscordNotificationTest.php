@@ -1025,7 +1025,6 @@ class DiscordNotificationTest extends Base
             )
         );
 
-        $this->assertStringContainsString('💬', $captured['content']);
         $this->assertStringContainsString('comment body must be visible', $captured['content']);
         $this->assertStringNotContainsString('comment body must be visible', $captured['embeds'][0]['description']);
     }
@@ -1862,7 +1861,7 @@ class DiscordNotificationTest extends Base
             \Kanboard\Model\CommentModel::EVENT_CREATE,
             array(
                 'task' => array('id' => 7, 'project_id' => $projectId, 'project_name' => 'CM', 'title' => 'T', 'owner_id' => $assigneeId),
-                'comment' => array('comment' => 'Please review @zoe', 'user_id' => 999, 'task_id' => 7),
+                'comment' => array('comment' => '  Please review @zoe.', 'user_id' => 999, 'task_id' => 7),
             )
         );
 
@@ -1870,8 +1869,9 @@ class DiscordNotificationTest extends Base
         $this->assertArrayHasKey('content', $captured);
         $this->assertStringContainsString('<@700000000000000007>', $captured['content']);
         $this->assertStringNotContainsString('<@100000000000000001>', $captured['content']);
-        // The comment content is top-level message content for Discord previews.
-        $this->assertStringContainsString('Please review @zoe', $captured['content']);
+        // The comment content is top-level message content with inline mention replacement.
+        $this->assertSame('  Please review <@700000000000000007>.', $captured['content']);
+        $this->assertStringNotContainsString('@zoe', $captured['content']);
         $this->assertStringNotContainsString('Please review', $captured['embeds'][0]['description']);
         $this->assertSame(array('users' => array('700000000000000007')), $captured['allowed_mentions']);
     }
@@ -1973,8 +1973,8 @@ class DiscordNotificationTest extends Base
         );
 
         $this->assertArrayHasKey('content', $captured);
-        $this->assertStringContainsString('<@900000000000000010>', $captured['content']);
-        $this->assertStringContainsString('please check @unselected', $captured['content']);
+        $this->assertStringContainsString('please check <@900000000000000010>', $captured['content']);
+        $this->assertStringNotContainsString('@unselected', $captured['content']);
         $this->assertSame(array('users' => array('900000000000000010')), $captured['allowed_mentions']);
         $this->assertStringNotContainsString('<@900000000000000009>', $captured['content']);
     }
@@ -2123,8 +2123,8 @@ class DiscordNotificationTest extends Base
         );
 
         $this->assertArrayHasKey('content', $captured);
-        $this->assertStringContainsString('<@600000000000000007>', $captured['content']);
-        $this->assertStringContainsString('please check @muted', $captured['content']);
+        $this->assertStringContainsString('please check <@600000000000000007>', $captured['content']);
+        $this->assertStringNotContainsString('@muted', $captured['content']);
         $this->assertSame(array('users' => array('600000000000000007')), $captured['allowed_mentions']);
         $this->assertStringNotContainsString('<@600000000000000006>', $captured['content']);
     }
@@ -2266,10 +2266,10 @@ class DiscordNotificationTest extends Base
             )
         );
 
-        $this->assertStringContainsString('<@710000000000000001>', $captured['content']);
-        $this->assertStringContainsString('<@999999999999999999\\>', $captured['content']);
+        $this->assertStringContainsString('hi <@710000000000000001> <@999999999999999999> @everyone **bold**', $captured['content']);
+        $this->assertStringNotContainsString('@safe', $captured['content']);
         $this->assertStringContainsString('@everyone', $captured['content']);
-        $this->assertStringContainsString('\\*\\*bold\\*\\*', $captured['content']);
+        $this->assertStringContainsString('**bold**', $captured['content']);
         $this->assertSame(array('users' => array('710000000000000001')), $captured['allowed_mentions']);
     }
 
@@ -2308,7 +2308,7 @@ class DiscordNotificationTest extends Base
         );
 
         $this->assertLessThanOrEqual(2000, mb_strlen($captured['content']));
-        $this->assertStringStartsWith('<@720000000000000002>'."\n".'💬 ', $captured['content']);
+        $this->assertStringStartsWith('<@720000000000000002> ', $captured['content']);
         $this->assertStringEndsWith('…', $captured['content']);
         $this->assertSame(array('users' => array('720000000000000002')), $captured['allowed_mentions']);
     }

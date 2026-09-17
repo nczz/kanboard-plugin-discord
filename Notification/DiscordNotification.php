@@ -347,13 +347,14 @@ class DiscordNotification extends Base implements NotificationInterface
     }
 
     /**
-     * Decide who to ping on the project-channel card.
+     * Decide what Discord message content should accompany the project card.
      *
-     * Priority for a NEW comment (comment.create): if the comment text mentions
-     * one or more Kanboard project members, those people are the intended
-     * beneficiaries. Ping the mentioned members that have mapped Discord IDs. If
-     * none of the mentioned members have a Discord ID, send the comment card
-     * without a ping instead of falling back to the task assignee.
+     * For a NEW comment (comment.create), preserve the Kanboard comment text and
+     * replace resolvable Kanboard @username tokens at their original positions
+     * with Discord <@snowflake> mentions. Unresolved tokens stay unchanged. A
+     * real project-member mention suppresses assignee fallback even when that
+     * member has no Discord id, because pinging the assignee would notify the
+     * wrong person.
      *
      * This is intentionally different from regular task lifecycle events, where
      * the assignee is the person expected to act on the card.
@@ -365,71 +366,114 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     protected function getMessageContextForEvent($eventName, array $eventData)
     {
-        if ($eventName === CommentModel::EVENT_CREATE && ! empty($eventData['comment']['comment'])) {
+        if ($eventName === CommentModel::EVENT_CREATE && isset($eventData['comment']['comment'])) {
             $projectId = (int) ($eventData['task']['project_id'] ?? 0);
             $authorId = (int) ($eventData['comment']['user_id'] ?? 0);
-            $commentMentions = $this->getCommentMentions($eventData['comment']['comment'], $projectId, $authorId);
+            $commentContext = $this->getCommentContentContext($eventData['comment']['comment'], $projectId, $authorId);
 
-            if ($commentMentions['has_member_mention']) {
+            if ($commentContext['has_member_mention']) {
                 return array(
-                    'content' => $commentMentions['mentions'],
-                    'users'   => $commentMentions['users'],
+                    'content' => $commentContext['content'],
+                    'users'   => $commentContext['users'],
                 );
             }
+
+            $assigneeContext = $this->buildMentionContext($this->getAssigneeId($eventData['task']));
+            if ($assigneeContext['content'] !== '') {
+                if ($commentContext['content'] === '') {
+                    return $assigneeContext;
+                }
+
+                return array(
+                    'content' => $assigneeContext['content'].' '.$commentContext['content'],
+                    'users'   => $assigneeContext['users'],
+                );
+            }
+
+            return array('content' => $commentContext['content'], 'users' => array());
         }
 
         return $this->buildMentionContext($this->getAssigneeId($eventData['task']));
     }
 
     /**
-     * Resolve comment @mentions against Kanboard users and mapped Discord IDs.
+     * Preserve comment text while replacing resolvable Kanboard @username tokens
+     * inline with Discord mentions.
      *
-     * A real Kanboard project-member mention suppresses the assignee fallback
-     * even when that user has no Discord ID mapped: in that case Discord receives
-     * the comment card without any ping, because pinging the assignee would alert
-     * the wrong person.
+     * The parser intentionally mirrors the plugin's historical mention detection
+     * pattern. A trailing "." is treated as punctuation rather than part of the
+     * username, matching the previous rtrim('.') behavior.
      *
      * @access protected
      * @param  string  $text
      * @param  integer $projectId
      * @param  integer $excludeUserId  User id to ignore (the comment author).
-     * @return array{has_member_mention: bool, mentions: string, users: string[]}
+     * @return array{has_member_mention: bool, content: string, users: string[]}
      */
-    protected function getCommentMentions($text, $projectId, $excludeUserId = 0)
+    protected function getCommentContentContext($text, $projectId, $excludeUserId = 0)
     {
-        if ($projectId <= 0 || $text === '' || ! preg_match_all('/@([^\s,!:?]+)/', $text, $matches)) {
-            return array('has_member_mention' => false, 'mentions' => '', 'users' => array());
+        $text = (string) $text;
+
+        if ($projectId <= 0 || $text === '' || ! preg_match_all('/@([^\s,!:?]+)/', $text, $matches, PREG_OFFSET_CAPTURE)) {
+            return array('has_member_mention' => false, 'content' => $text, 'users' => array());
         }
 
-        $usernames = array_map(function ($username) {
-            return rtrim($username, '.');
-        }, $matches[1]);
+        $usernames = array();
+        foreach ($matches[1] as $match) {
+            $username = rtrim($match[0], '.');
+            if ($username !== '') {
+                $usernames[$username] = $username;
+            }
+        }
+
+        if (empty($usernames)) {
+            return array('has_member_mention' => false, 'content' => $text, 'users' => array());
+        }
 
         $mentionedUsers = $this->db->table(\Kanboard\Model\UserModel::TABLE)
-            ->columns('id')
-            ->in('username', array_unique($usernames))
+            ->columns('id', 'username')
+            ->in('username', array_values($usernames))
             ->findAll();
 
-        $hasMemberMention = false;
-        $mentions = array();
-        $discordUserIds = array();
+        $usersByUsername = array();
         foreach ($mentionedUsers as $user) {
-            $userId = (int) $user['id'];
-            if ($userId === (int) $excludeUserId || ! $this->projectPermissionModel->isMember($projectId, $userId)) {
-                continue;
-            }
-            $hasMemberMention = true;
-
-            $discordId = $this->getDiscordUserId($userId);
-            if ($discordId !== '') {
-                $mentions[$userId] = '<@'.$discordId.'>';
-                $discordUserIds[$discordId] = $discordId;
-            }
+            $usersByUsername[$user['username']] = $user;
         }
+
+        $hasMemberMention = false;
+        $discordUserIds = array();
+        $content = '';
+        $cursor = 0;
+
+        foreach ($matches[0] as $index => $fullMatch) {
+            $rawMention = $fullMatch[0];
+            $mentionOffset = $fullMatch[1];
+            $rawUsername = $matches[1][$index][0];
+            $username = rtrim($rawUsername, '.');
+            $punctuation = substr($rawUsername, strlen($username));
+            $replacement = $rawMention;
+
+            if ($username !== '' && isset($usersByUsername[$username])) {
+                $userId = (int) $usersByUsername[$username]['id'];
+                if ($userId !== (int) $excludeUserId && $this->projectPermissionModel->isMember($projectId, $userId)) {
+                    $hasMemberMention = true;
+                    $discordId = $this->getDiscordUserId($userId);
+                    if ($discordId !== '' && (isset($discordUserIds[$discordId]) || count($discordUserIds) < EmbedBuilder::LIMIT_ALLOWED_MENTION_USERS)) {
+                        $discordUserIds[$discordId] = $discordId;
+                        $replacement = '<@'.$discordId.'>'.$punctuation;
+                    }
+                }
+            }
+
+            $content .= substr($text, $cursor, $mentionOffset - $cursor).$replacement;
+            $cursor = $mentionOffset + strlen($rawMention);
+        }
+
+        $content .= substr($text, $cursor);
 
         return array(
             'has_member_mention' => $hasMemberMention,
-            'mentions'           => implode(' ', array_values($mentions)),
+            'content'            => $content,
             'users'              => array_values($discordUserIds),
         );
     }
