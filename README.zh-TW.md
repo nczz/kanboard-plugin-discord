@@ -118,7 +118,9 @@ AND task does not mute Email for this event
 
 Email suppression 是設定式規則，不是 Discord 成功後的 fallback。只要勾選 **Suppress Email**，符合該事件的 Kanboard Email 通知就不會寄出，即使後續 Discord delivery 失敗也一樣。這個外掛不會改動每個使用者的 Email checkbox；它只會針對符合規則的事件抑制 delivery。
 
-留言 @mention 的 Discord ping 由 **Comment created** 卡片處理，因此頻道只會收到一張包含留言內容的完整卡片。**Comment @mentions** 這一列控制 Email mention suppression，不會建立額外的 Discord 卡片。
+留言 @mention 的 Discord ping 由 **Comment created** 卡片處理。對新留言，Discord message content 會包含明確的 Discord mention 列表與已清理的留言正文（受 Discord 2000 字元 message-content 上限保護），embed 則保留任務與專案上下文。**Comment @mentions** 這一列控制 Email mention suppression，不會建立額外的 Discord 卡片。
+
+Discord 每則訊息最多允許 100 個 explicit user mentions；如果留言提及的 mapped users 超過此上限，webhook payload 會將實際 ping 名單限制在 Discord 上限內，同時保留留言文字。
 
 Overdue 卡片會在 Kanboard 的 `notification:overdue-tasks` command 執行時發送。Kanboard core 透過 command 而不是一般 project event 處理 overdue tasks；此外掛擴充該 command，依專案 Discord 設定直接送 project Discord cards，並做 de-duplicate，確保即使 Kanboard 通知多位使用者或 manager，Discord 頻道對同一張 overdue task 也只收到一張卡片。Overdue Email suppression 會逐 task 套用，因此混合批次中未被 suppress 的 overdue tasks 仍會寄 Email。
 
@@ -149,12 +151,13 @@ Task rules 只能排除通知，不會啟用專案層級已關閉的 Discord eve
 
 - **Title** 一律標示任務：`#<id> · <task title>`。
 - **Description** 一律先以完整動作句開頭（誰做了什麼，例如「Alice moved the task #42 to the column In Progress」）。
-- 下方可選擇顯示內容摘要（任務描述 / 留言 / 子任務），並依設定長度裁切。
+- 對**新留言**，top-level Discord message content 會顯示明確 mentions 與已清理的留言正文，因此頻道 preview 與 push notification 能直接看到留言文字。
+- 對其他 free-text events，可選擇在狀態句下方顯示**內容摘要**（任務描述 / 留言更新或刪除 / 子任務文字），並依設定長度裁切。
 
-摘要長度可在專案的 **Settings > Integrations > Discord > Content excerpt length** 設定：
+Embed 摘要長度可在專案的 **Settings > Integrations > Discord > Content excerpt length** 設定：
 
 - 留空使用預設值（280 字元）。
-- 設為 `0` 可完全隱藏內容摘要（只保留狀態）。
+- 設為 `0` 可完全隱藏 embed 摘要（只保留狀態）。新留言的 message content 仍會顯示在 top-level Discord content。
 - 也可透過 application setting `discord_excerpt_length` 設定全域預設值。
 
 ### 2. 啟用使用者的 Discord mentions

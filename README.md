@@ -146,10 +146,16 @@ Email suppression is a setting-based rule, not a Discord-success fallback. If
 not sent even if Discord delivery later fails. This plugin does not change each
 user's Email checkbox; it only suppresses delivery for matching events.
 
-Comment @mention Discord pings are handled by the **Comment created** card so the
-channel receives one complete card with the comment body. The **Comment
-@mentions** row controls Email mention suppression and does not create a separate
-Discord card.
+Comment @mention Discord pings are handled by the **Comment created** card. For
+new comments, the Discord message content contains the explicit Discord mention
+list plus the sanitized comment body (bounded by Discord's 2000-character
+message-content limit), while the embed keeps the task/project context. The
+**Comment @mentions** row controls Email mention suppression and does not create
+a separate Discord card.
+
+Discord allows at most 100 explicit user mentions per message; if a comment
+mentions more mapped users than that, the webhook payload caps the ping list to
+Discord's limit while preserving the comment text.
 
 Overdue cards are emitted when Kanboard's `notification:overdue-tasks` command
 runs. Kanboard core routes overdue tasks through a command instead of regular
@@ -193,14 +199,19 @@ keeping the **content** compact so channels don't get flooded:
 - **Title** always identifies the task: `#<id> · <task title>`.
 - **Description** always starts with a full action sentence (who did what,
   e.g. "Alice moved the task #42 to the column In Progress").
-- Below that, an optional **content excerpt** (task description / comment /
-  subtask) is shown, trimmed to a configurable length.
+- For **new comments**, the top-level Discord message content shows the explicit
+  mentions plus the sanitized comment body, so channel previews and push
+  notifications contain the comment text directly.
+- For other free-text events, an optional **content excerpt** (task description /
+  comment update/delete / subtask text) is shown below the status sentence,
+  trimmed to a configurable length.
 
-The excerpt length is set per project under **Settings > Integrations >
+The embed excerpt length is set per project under **Settings > Integrations >
 Discord > Content excerpt length**:
 
 - Leave empty to use the default (280 characters).
-- Set `0` to hide content excerpts entirely (status-only cards).
+- Set `0` to hide embed excerpts entirely (status-only cards). New comment
+  message content is still shown in top-level Discord content.
 - A global default can also be set via the `discord_excerpt_length`
   application setting.
 

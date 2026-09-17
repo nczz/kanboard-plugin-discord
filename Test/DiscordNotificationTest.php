@@ -946,7 +946,7 @@ class DiscordNotificationTest extends Base
         $this->assertArrayHasKey('content', $captured);
         $this->assertSame('Kanboard', $captured['username']);
         $this->assertStringContainsString('<@987654321012345678>', $captured['content']);
-        $this->assertSame(array('parse' => array('users')), $captured['allowed_mentions']);
+        $this->assertSame(array('users' => array('987654321012345678')), $captured['allowed_mentions']);
 
         $embed = $captured['embeds'][0];
         // Title always identifies the task: "#42 · <title>"
@@ -996,7 +996,7 @@ class DiscordNotificationTest extends Base
         $this->assertLessThan(500, mb_strlen($captured['embeds'][0]['description']));
     }
 
-    public function testEmptyProjectExcerptLengthFallsBackToDefaultAndShowsComment()
+    public function testEmptyProjectExcerptLengthFallsBackToDefaultAndShowsCommentContent()
     {
         $this->loadPlugin();
         $http = $this->mockHttp();
@@ -1025,8 +1025,9 @@ class DiscordNotificationTest extends Base
             )
         );
 
-        $this->assertStringContainsString('💬', $captured['embeds'][0]['description']);
-        $this->assertStringContainsString('comment body must be visible', $captured['embeds'][0]['description']);
+        $this->assertStringContainsString('💬', $captured['content']);
+        $this->assertStringContainsString('comment body must be visible', $captured['content']);
+        $this->assertStringNotContainsString('comment body must be visible', $captured['embeds'][0]['description']);
     }
 
     public function testExcerptLengthConfigurablePerProject()
@@ -1178,6 +1179,7 @@ class DiscordNotificationTest extends Base
         );
 
         $this->assertStringContainsString('<@111222333444555666>', $captured['content']);
+        $this->assertSame(array('users' => array('111222333444555666')), $captured['allowed_mentions']);
         $this->assertStringContainsString('Hey @carol', $captured['embeds'][0]['description']);
     }
 
@@ -1868,9 +1870,10 @@ class DiscordNotificationTest extends Base
         $this->assertArrayHasKey('content', $captured);
         $this->assertStringContainsString('<@700000000000000007>', $captured['content']);
         $this->assertStringNotContainsString('<@100000000000000001>', $captured['content']);
-        // The comment content is still visible on the card.
-        $this->assertStringContainsString('Please review', $captured['embeds'][0]['description']);
-        $this->assertStringContainsString('💬', $captured['embeds'][0]['description']);
+        // The comment content is top-level message content for Discord previews.
+        $this->assertStringContainsString('Please review @zoe', $captured['content']);
+        $this->assertStringNotContainsString('Please review', $captured['embeds'][0]['description']);
+        $this->assertSame(array('users' => array('700000000000000007')), $captured['allowed_mentions']);
     }
 
     /**
@@ -1917,9 +1920,10 @@ class DiscordNotificationTest extends Base
             )
         );
 
-        $this->assertArrayNotHasKey('content', $captured);
-        $this->assertArrayNotHasKey('allowed_mentions', $captured);
-        $this->assertStringContainsString('please check', $captured['embeds'][0]['description']);
+        $this->assertArrayHasKey('content', $captured);
+        $this->assertStringContainsString('please check @nomap', $captured['content']);
+        $this->assertSame(array('parse' => array()), $captured['allowed_mentions']);
+        $this->assertStringNotContainsString('please check', $captured['embeds'][0]['description']);
     }
 
     /**
@@ -1970,6 +1974,8 @@ class DiscordNotificationTest extends Base
 
         $this->assertArrayHasKey('content', $captured);
         $this->assertStringContainsString('<@900000000000000010>', $captured['content']);
+        $this->assertStringContainsString('please check @unselected', $captured['content']);
+        $this->assertSame(array('users' => array('900000000000000010')), $captured['allowed_mentions']);
         $this->assertStringNotContainsString('<@900000000000000009>', $captured['content']);
     }
 
@@ -2015,6 +2021,8 @@ class DiscordNotificationTest extends Base
         // No mention in the comment -> ping the assignee.
         $this->assertArrayHasKey('content', $captured);
         $this->assertStringContainsString('<@200000000000000002>', $captured['content']);
+        $this->assertStringContainsString('No mention here', $captured['content']);
+        $this->assertSame(array('users' => array('200000000000000002')), $captured['allowed_mentions']);
     }
 
     /**
@@ -2059,6 +2067,8 @@ class DiscordNotificationTest extends Base
         // Mentioned user is not a project member -> assignee still pinged.
         $this->assertArrayHasKey('content', $captured);
         $this->assertStringContainsString('<@300000000000000003>', $captured['content']);
+        $this->assertStringContainsString('ping @ghost who is not a member', $captured['content']);
+        $this->assertSame(array('users' => array('300000000000000003')), $captured['allowed_mentions']);
     }
 
     /**
@@ -2114,6 +2124,8 @@ class DiscordNotificationTest extends Base
 
         $this->assertArrayHasKey('content', $captured);
         $this->assertStringContainsString('<@600000000000000007>', $captured['content']);
+        $this->assertStringContainsString('please check @muted', $captured['content']);
+        $this->assertSame(array('users' => array('600000000000000007')), $captured['allowed_mentions']);
         $this->assertStringNotContainsString('<@600000000000000006>', $captured['content']);
     }
 
@@ -2163,6 +2175,8 @@ class DiscordNotificationTest extends Base
         // Update event -> assignee is pinged regardless of the mention.
         $this->assertArrayHasKey('content', $captured);
         $this->assertStringContainsString('<@400000000000000004>', $captured['content']);
+        $this->assertStringContainsString('edited @yan', $captured['embeds'][0]['description']);
+        $this->assertSame(array('users' => array('400000000000000004')), $captured['allowed_mentions']);
     }
 
     /**
@@ -2211,5 +2225,115 @@ class DiscordNotificationTest extends Base
         // Only a self-mention -> not treated as "mentions a member" -> assignee pinged.
         $this->assertArrayHasKey('content', $captured);
         $this->assertStringContainsString('<@500000000000000005>', $captured['content']);
+        $this->assertStringContainsString('note to @self', $captured['content']);
+        $this->assertSame(array('users' => array('500000000000000005')), $captured['allowed_mentions']);
+    }
+
+    public function testCommentCreateContentUsesExplicitAllowedMentionsOnly()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectUserRoleModel = new ProjectUserRoleModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'SAFE'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $memberId = $userModel->create(array('username' => 'safe', 'name' => 'Safe'));
+        $projectUserRoleModel->addUser($projectId, $memberId, Role::PROJECT_MEMBER);
+        $this->container['userMetadataModel']->save($memberId, array(
+            DiscordNotification::META_USER_ID => '710000000000000001',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 15, 'project_id' => $projectId, 'project_name' => 'SAFE', 'title' => 'T', 'owner_id' => 0),
+                'comment' => array('comment' => 'hi @safe <@999999999999999999> @everyone **bold**', 'user_id' => 999, 'task_id' => 15),
+            )
+        );
+
+        $this->assertStringContainsString('<@710000000000000001>', $captured['content']);
+        $this->assertStringContainsString('<@999999999999999999\\>', $captured['content']);
+        $this->assertStringContainsString('@everyone', $captured['content']);
+        $this->assertStringContainsString('\\*\\*bold\\*\\*', $captured['content']);
+        $this->assertSame(array('users' => array('710000000000000001')), $captured['allowed_mentions']);
+    }
+
+    public function testCommentCreateContentStaysWithinDiscordLimit()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+
+        $projectId = $projectModel->create(array('name' => 'LONG'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+        $assigneeId = $userModel->create(array('username' => 'long-owner', 'name' => 'Long Owner'));
+        $this->container['userMetadataModel']->save($assigneeId, array(
+            DiscordNotification::META_USER_ID => '720000000000000002',
+        ));
+
+        $captured = null;
+        $http->expects($this->once())->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\CommentModel::EVENT_CREATE,
+            array(
+                'task' => array('id' => 16, 'project_id' => $projectId, 'project_name' => 'LONG', 'title' => 'T', 'owner_id' => $assigneeId),
+                'comment' => array('comment' => str_repeat('x', 3000), 'user_id' => 999, 'task_id' => 16),
+            )
+        );
+
+        $this->assertLessThanOrEqual(2000, mb_strlen($captured['content']));
+        $this->assertStringStartsWith('<@720000000000000002>'."\n".'💬 ', $captured['content']);
+        $this->assertStringEndsWith('…', $captured['content']);
+        $this->assertSame(array('users' => array('720000000000000002')), $captured['allowed_mentions']);
+    }
+
+    public function testAllowedMentionsUserListIsCappedForDiscordLimit()
+    {
+        $this->loadPlugin();
+        $ids = array();
+        $mentions = array();
+        for ($i = 1; $i <= 101; $i++) {
+            $id = (string) (730000000000000000 + $i);
+            $ids[] = $id;
+            $mentions[] = '<@'.$id.'>';
+        }
+
+        $builder = new \Kanboard\Plugin\Discord\Builder\EmbedBuilder($this->container);
+        $payload = $builder->build(
+            array('id' => 1, 'name' => 'MENTIONCAP'),
+            \Kanboard\Model\TaskModel::EVENT_CREATE,
+            array('task' => array('id' => 17, 'project_id' => 1, 'project_name' => 'MENTIONCAP', 'title' => 'T')),
+            array('content' => implode(' ', $mentions), 'users' => $ids)
+        );
+
+        $this->assertCount(100, $payload['allowed_mentions']['users']);
+        $this->assertSame('730000000000000001', $payload['allowed_mentions']['users'][0]);
+        $this->assertSame('730000000000000100', $payload['allowed_mentions']['users'][99]);
     }
 }

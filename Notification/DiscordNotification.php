@@ -198,12 +198,12 @@ class DiscordNotification extends Base implements NotificationInterface
             return;
         }
 
-        $mention = $this->buildMention($user['id']);
-        if ($mention === '') {
+        $messageContext = $this->buildMentionContext($user['id']);
+        if ($messageContext['content'] === '') {
             return;
         }
 
-        $this->send($webhook, $project, $eventName, $eventData, $mention);
+        $this->send($webhook, $project, $eventName, $eventData, $messageContext);
     }
 
     /**
@@ -274,8 +274,8 @@ class DiscordNotification extends Base implements NotificationInterface
                         'project_name' => isset($task['project_name']) ? $task['project_name'] : $project['name'],
                     );
 
-                    $mention = $this->buildMention($this->getAssigneeId($task));
-                    $this->send($webhook, $project, TaskModel::EVENT_OVERDUE, $singleEvent, $mention);
+                    $messageContext = $this->buildMentionContext($this->getAssigneeId($task));
+                    $this->send($webhook, $project, TaskModel::EVENT_OVERDUE, $singleEvent, $messageContext);
                     self::$sentOverdueTaskKeys[$this->getOverdueTaskKey($task)] = true;
                 }
             }
@@ -328,8 +328,8 @@ class DiscordNotification extends Base implements NotificationInterface
                 // builder (which reads $eventData['tasks'] for overdue events)
                 // renders THIS task instead of the aggregate count / first task.
                 $singleEvent['tasks'] = array($task);
-                $mention = $this->buildMention($this->getAssigneeId($task));
-                $this->send($webhook, $project, $eventName, $singleEvent, $mention);
+                $messageContext = $this->buildMentionContext($this->getAssigneeId($task));
+                $this->send($webhook, $project, $eventName, $singleEvent, $messageContext);
             }
             return;
         }
@@ -338,12 +338,12 @@ class DiscordNotification extends Base implements NotificationInterface
             return;
         }
 
-        $mention = '';
+        $messageContext = array();
         if (! empty($eventData['task'])) {
-            $mention = $this->getMentionForEvent($eventName, $eventData);
+            $messageContext = $this->getMessageContextForEvent($eventName, $eventData);
         }
 
-        $this->send($webhook, $project, $eventName, $eventData, $mention);
+        $this->send($webhook, $project, $eventName, $eventData, $messageContext);
     }
 
     /**
@@ -361,9 +361,9 @@ class DiscordNotification extends Base implements NotificationInterface
      * @access protected
      * @param  string $eventName
      * @param  array  $eventData
-     * @return string  Discord mention string, or empty when nobody to ping.
+     * @return array{content: string, users: string[]}  Message content and explicit Discord users allowed to ping.
      */
-    protected function getMentionForEvent($eventName, array $eventData)
+    protected function getMessageContextForEvent($eventName, array $eventData)
     {
         if ($eventName === CommentModel::EVENT_CREATE && ! empty($eventData['comment']['comment'])) {
             $projectId = (int) ($eventData['task']['project_id'] ?? 0);
@@ -371,11 +371,14 @@ class DiscordNotification extends Base implements NotificationInterface
             $commentMentions = $this->getCommentMentions($eventData['comment']['comment'], $projectId, $authorId);
 
             if ($commentMentions['has_member_mention']) {
-                return $commentMentions['mentions'];
+                return array(
+                    'content' => $commentMentions['mentions'],
+                    'users'   => $commentMentions['users'],
+                );
             }
         }
 
-        return $this->buildMention($this->getAssigneeId($eventData['task']));
+        return $this->buildMentionContext($this->getAssigneeId($eventData['task']));
     }
 
     /**
@@ -390,39 +393,62 @@ class DiscordNotification extends Base implements NotificationInterface
      * @param  string  $text
      * @param  integer $projectId
      * @param  integer $excludeUserId  User id to ignore (the comment author).
-     * @return array{has_member_mention: bool, mentions: string}
+     * @return array{has_member_mention: bool, mentions: string, users: string[]}
      */
     protected function getCommentMentions($text, $projectId, $excludeUserId = 0)
     {
         if ($projectId <= 0 || $text === '' || ! preg_match_all('/@([^\s,!:?]+)/', $text, $matches)) {
-            return array('has_member_mention' => false, 'mentions' => '');
+            return array('has_member_mention' => false, 'mentions' => '', 'users' => array());
         }
 
         $usernames = array_map(function ($username) {
             return rtrim($username, '.');
         }, $matches[1]);
 
-        $users = $this->db->table(\Kanboard\Model\UserModel::TABLE)
+        $mentionedUsers = $this->db->table(\Kanboard\Model\UserModel::TABLE)
             ->columns('id')
             ->in('username', array_unique($usernames))
             ->findAll();
 
         $hasMemberMention = false;
         $mentions = array();
-        foreach ($users as $user) {
+        $discordUserIds = array();
+        foreach ($mentionedUsers as $user) {
             $userId = (int) $user['id'];
             if ($userId === (int) $excludeUserId || ! $this->projectPermissionModel->isMember($projectId, $userId)) {
                 continue;
             }
             $hasMemberMention = true;
 
-            $mention = $this->buildMention($userId);
-            if ($mention !== '') {
-                $mentions[$userId] = $mention;
+            $discordId = $this->getDiscordUserId($userId);
+            if ($discordId !== '') {
+                $mentions[$userId] = '<@'.$discordId.'>';
+                $discordUserIds[$discordId] = $discordId;
             }
         }
 
-        return array('has_member_mention' => $hasMemberMention, 'mentions' => implode(' ', array_values($mentions)));
+        return array(
+            'has_member_mention' => $hasMemberMention,
+            'mentions'           => implode(' ', array_values($mentions)),
+            'users'              => array_values($discordUserIds),
+        );
+    }
+
+    /**
+     * Build a message mention context for a Kanboard user id.
+     *
+     * @access protected
+     * @param  integer $userId
+     * @return array{content: string, users: string[]}
+     */
+    protected function buildMentionContext($userId)
+    {
+        $discordId = $this->getDiscordUserId($userId);
+        if ($discordId === '') {
+            return array('content' => '', 'users' => array());
+        }
+
+        return array('content' => '<@'.$discordId.'>', 'users' => array($discordId));
     }
 
     /**
@@ -559,13 +585,13 @@ class DiscordNotification extends Base implements NotificationInterface
     }
 
     /**
-     * Build a Discord mention string ("<@id>") for a Kanboard user id.
+     * Return a mapped Discord user snowflake for a Kanboard user id.
      *
      * @access protected
      * @param  integer $userId
      * @return string  Empty when the user has no valid Discord ID mapped.
      */
-    protected function buildMention($userId)
+    protected function getDiscordUserId($userId)
     {
         if (empty($userId)) {
             return '';
@@ -574,11 +600,7 @@ class DiscordNotification extends Base implements NotificationInterface
         $discordId = trim($this->userMetadataModel->get($userId, self::META_USER_ID, ''));
 
         // Discord user IDs (snowflakes) are numeric strings.
-        if ($discordId === '' || ! ctype_digit($discordId)) {
-            return '';
-        }
-
-        return '<@'.$discordId.'>';
+        return ctype_digit($discordId) ? $discordId : '';
     }
 
     /**
@@ -601,11 +623,11 @@ class DiscordNotification extends Base implements NotificationInterface
      * @param  array  $project
      * @param  string $eventName
      * @param  array  $eventData
-     * @param  string $mention
+     * @param  array  $messageContext
      */
-    protected function send($webhook, array $project, $eventName, array $eventData, $mention = '')
+    protected function send($webhook, array $project, $eventName, array $eventData, array $messageContext = array())
     {
-        $payload = $this->embedBuilder->build($project, $eventName, $eventData, $mention);
+        $payload = $this->embedBuilder->build($project, $eventName, $eventData, $messageContext);
 
         // Fire-and-forget: never block or surface errors to the triggering request.
         $this->httpClient->postJson($webhook, $payload, array(), false, false);

@@ -42,6 +42,11 @@ class EmbedBuilder extends Base
     const LIMIT_CONTENT     = 2000;
 
     /**
+     * Discord allowed_mentions.users hard limit.
+     */
+    const LIMIT_ALLOWED_MENTION_USERS = 100;
+
+    /**
      * Default length (characters) for the task content excerpt shown in the
      * card (task description / comment / subtask title). Kept short on purpose
      * so notifications convey status without flooding the channel with content.
@@ -63,10 +68,10 @@ class EmbedBuilder extends Base
      * @param  array  $project
      * @param  string $eventName
      * @param  array  $eventData
-     * @param  string $mentionContent  Pre-rendered "<@id> <@id>" mention string
+     * @param  array  $messageContext  Pre-rendered message content and explicit mention user ids.
      * @return array  Discord webhook JSON payload
      */
-    public function build(array $project, $eventName, array $eventData, $mentionContent = '')
+    public function build(array $project, $eventName, array $eventData, array $messageContext = array())
     {
         $embed = array(
             'title'       => $this->getEmbedTitle($eventData, $project),
@@ -97,11 +102,10 @@ class EmbedBuilder extends Base
             'embeds'      => array($embed),
         );
 
-        // The content field is what triggers Discord push notifications / pings.
-        if ($mentionContent !== '') {
-            $payload['content'] = $this->truncate($mentionContent, self::LIMIT_CONTENT);
-            // Restrict pings to explicitly listed users to avoid accidental @everyone.
-            $payload['allowed_mentions'] = array('parse' => array('users'));
+        $content = $this->getMessageContent($eventName, $eventData, $messageContext);
+        if ($content !== '') {
+            $payload['content'] = $content;
+            $payload['allowed_mentions'] = $this->getAllowedMentions($messageContext);
         }
 
         return $payload;
@@ -270,7 +274,9 @@ class EmbedBuilder extends Base
      *     information that is ALWAYS shown, because it is part of "what changed",
      *     not free-form text.
      *   - Free text (task description, comment): trimmed to the configurable
-     *     excerpt length, and fully hidden when the length is set to 0.
+     *     excerpt length, and fully hidden when the length is set to 0. Newly
+     *     created comments are excluded here because their body is rendered in
+     *     the Discord message content for better channel preview visibility.
      *
      * @access protected
      * @return string
@@ -290,6 +296,9 @@ class EmbedBuilder extends Base
             return '📎 '.$this->escapeMarkdown($eventData['file']['name']);
         }
 
+        if ($eventName === CommentModel::EVENT_CREATE) {
+            return '';
+        }
         // Free-text content — trimmed to the configurable length (0 hides it).
         $max = $this->getExcerptLength($project);
         if ($max <= 0) {
@@ -522,6 +531,88 @@ class EmbedBuilder extends Base
         }
 
         return min((int) $value, self::LIMIT_DESCRIPTION);
+    }
+
+    /**
+     * Build the top-level Discord message content.
+     *
+     * Comment creation is special: Discord renders top-level content in channel
+     * previews and push notifications more directly than embed text, so include
+     * the sanitized comment body next to the explicit mention list. The embed
+     * still carries task/project context.
+     *
+     * @access protected
+     * @param  string $eventName
+     * @param  array  $eventData
+     * @param  array  $messageContext
+     * @return string
+     */
+    protected function getMessageContent($eventName, array $eventData, array $messageContext)
+    {
+        $mentionContent = isset($messageContext['content']) ? trim((string) $messageContext['content']) : '';
+
+        if ($eventName !== CommentModel::EVENT_CREATE || empty($eventData['comment']['comment'])) {
+            return $this->truncate($mentionContent, self::LIMIT_CONTENT);
+        }
+
+        $comment = '💬 '.$this->sanitizeContentText($eventData['comment']['comment']);
+        if ($mentionContent === '') {
+            return $this->truncate($comment, self::LIMIT_CONTENT);
+        }
+
+        $remaining = self::LIMIT_CONTENT - mb_strlen($mentionContent) - 1;
+        if ($remaining <= 0) {
+            return $this->truncate($mentionContent, self::LIMIT_CONTENT);
+        }
+
+        return $mentionContent."\n".$this->truncate($comment, $remaining);
+    }
+
+    /**
+     * Build Discord allowed_mentions.
+     *
+     * Discord webhook defaults parse user mentions from content. This payload is
+     * stricter: only plugin-resolved Discord user ids may ping. Comment text can
+     * contain arbitrary user input, so content without explicit users disables
+     * parsing entirely.
+     *
+     * @access protected
+     * @param  array $messageContext
+     * @return array
+     */
+    protected function getAllowedMentions(array $messageContext)
+    {
+        $users = array();
+        if (! empty($messageContext['users']) && is_array($messageContext['users'])) {
+            foreach ($messageContext['users'] as $userId) {
+                $userId = (string) $userId;
+                if (ctype_digit($userId)) {
+                    $users[$userId] = $userId;
+                }
+            }
+        }
+
+        if (! empty($users)) {
+            return array('users' => array_slice(array_values($users), 0, self::LIMIT_ALLOWED_MENTION_USERS));
+        }
+
+        return array('parse' => array());
+    }
+
+    /**
+     * Sanitize user-generated text for top-level Discord message content.
+     *
+     * allowed_mentions is the ping guard. This method handles display hardening:
+     * decode Kanboard HTML entities and escape Discord markdown so the comment is
+     * readable as text instead of formatting the notification.
+     *
+     * @access protected
+     * @param  string $text
+     * @return string
+     */
+    protected function sanitizeContentText($text)
+    {
+        return $this->escapeMarkdown($this->decodeEntities($text));
     }
 
     /**
