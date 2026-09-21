@@ -218,6 +218,9 @@ keeping the **content** compact so channels don't get flooded:
   Kanboard comment body and replaces resolvable `@username` tokens inline with
   Discord mentions, so channel previews and push notifications contain the
   comment text directly.
+- For **task updates**, the content block lists changed fields with compact
+  values (`old → new`) when previous values are available. Long descriptions are
+  summarized by length instead of pasted into the channel.
 - For other free-text events, an optional **content excerpt** (task description /
   comment update/delete / subtask text) is shown below the status sentence,
   trimmed to a configurable length.

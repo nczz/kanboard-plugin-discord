@@ -69,5 +69,6 @@ return array(
     'Assignee' => '負責人',
     'Column' => '欄位',
     'Changed' => '變更欄位',
+    'characters' => '字元',
     'Save' => '儲存',
 );

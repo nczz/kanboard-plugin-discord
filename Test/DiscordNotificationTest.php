@@ -1981,7 +1981,7 @@ class DiscordNotificationTest extends Base
         $this->assertStringContainsString('design-spec.pdf', $captured['embeds'][0]['description']);
     }
 
-    public function testTaskUpdateShowsChangedFields()
+    public function testTaskUpdateShowsFieldValueDiffsAndDescriptionSummary()
     {
         $this->loadPlugin();
         $http = $this->mockHttp();
@@ -1999,21 +1999,76 @@ class DiscordNotificationTest extends Base
                 return '';
             });
 
+        $oldDescription = str_repeat('old body noise ', 8);
+        $newDescription = str_repeat('new body signal ', 9);
+
         $notification = new DiscordNotification($this->container);
         $notification->notifyProject(
             $projectModel->getById($projectId),
             \Kanboard\Model\TaskModel::EVENT_UPDATE,
             array(
-                'task' => array('id' => 12, 'project_id' => $projectId, 'project_name' => 'UP', 'title' => 'T', 'owner_id' => 0),
-                'changes' => array('priority' => 2, 'due_date' => 1710000000, 'date_modification' => 123),
+                'task' => array(
+                    'id' => 12, 'project_id' => $projectId, 'project_name' => 'UP',
+                    'title' => 'T', 'owner_id' => 0,
+                ),
+                'previous_task' => array(
+                    'priority' => 1,
+                    'date_due' => 0,
+                    'date_started' => 1700000000,
+                    'time_estimated' => 1,
+                    'time_spent' => 0,
+                    'description' => $oldDescription,
+                    'owner_ms' => 'alice',
+                ),
+                'changes' => array(
+                    'priority' => 2,
+                    'date_due' => 1710000000,
+                    'date_started' => 1700086400,
+                    'time_estimated' => 2.5,
+                    'time_spent' => 0.25,
+                    'description' => $newDescription,
+                    'owner_ms' => 'bob',
+                    'date_modification' => 123,
+                ),
             )
         );
 
         $desc = $captured['embeds'][0]['description'];
-        // "Changed" line lists human labels, ignores internal timestamps.
-        $this->assertStringContainsString('Priority', $desc);
-        $this->assertStringContainsString('Due Date', $desc);
+        $this->assertStringContainsString('Priority: 1 → 2', $desc);
+        $this->assertStringContainsString('Due Date: — → 2024-03-09', $desc);
+        $this->assertStringContainsString('Start Date: 2023-11-14 → 2023-11-15', $desc);
+        $this->assertStringContainsString('Time estimated: 1h → 2.5h', $desc);
+        $this->assertStringContainsString('Time spent: — → 0.25h', $desc);
+        $this->assertStringContainsString('Owner Ms: alice → bob', $desc);
+        $this->assertStringContainsString('Description:', $desc);
+        $this->assertStringContainsString('characters', $desc);
+        $this->assertStringNotContainsString('old body noise', $desc);
+        $this->assertStringNotContainsString('new body signal', $desc);
         $this->assertStringNotContainsString('date_modification', $desc);
+    }
+
+    public function testCoreTaskUpdateEventCarriesPreviousTask()
+    {
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'task-core-changes'));
+        $taskId = $this->createTask($projectId, 'Task', array('priority' => 1, 'time_estimated' => 1));
+
+        $captured = array();
+        $this->dispatcher->addListener(\Kanboard\Model\TaskModel::EVENT_UPDATE, function ($event) use (&$captured) {
+            $captured = $event->getAll();
+        });
+
+        $taskModificationModel = new \Kanboard\Model\TaskModificationModel($this->container);
+        $this->assertTrue($taskModificationModel->update(array(
+            'id' => $taskId,
+            'priority' => 2,
+            'time_estimated' => 3,
+        )));
+
+        $this->assertArrayHasKey('previous_task', $captured);
+        $this->assertSame(1, (int) $captured['previous_task']['priority']);
+        $this->assertSame(2, (int) $captured['changes']['priority']);
+        $this->assertSame(3.0, (float) $captured['changes']['time_estimated']);
     }
 
     public function testDescriptionNeverExceedsDiscordLimit()

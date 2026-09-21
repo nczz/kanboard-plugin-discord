@@ -338,8 +338,10 @@ class EmbedBuilder extends Base
     }
 
     /**
-     * Human-readable "changed fields" line for a task update, e.g.
-     * "Changed: Priority, Due Date".
+     * Human-readable field-level details for a task update.
+     *
+     * Small scalar fields show the effective before/after values. Large text
+     * fields stay summarized so description edits do not flood the Discord card.
      *
      * @access protected
      * @param  array $eventData
@@ -351,6 +353,149 @@ class EmbedBuilder extends Base
             return '';
         }
 
+        $lines = array();
+        $previousTask = ! empty($eventData['previous_task']) && is_array($eventData['previous_task'])
+            ? $eventData['previous_task']
+            : array();
+        $task = ! empty($eventData['task']) && is_array($eventData['task'])
+            ? $eventData['task']
+            : array();
+
+        foreach ($eventData['changes'] as $field => $newValue) {
+            if ($this->isIgnoredTaskChangeField($field)) {
+                continue;
+            }
+
+            $oldValue = array_key_exists($field, $previousTask) ? $previousTask[$field] : null;
+            $line = $this->formatTaskChangeLine($field, $oldValue, $newValue, $task, ! empty($previousTask));
+            if ($line !== '') {
+                $lines[] = $line;
+            }
+        }
+
+        if (empty($lines)) {
+            return '';
+        }
+
+        return t('Changed').":\n- ".implode("\n- ", $lines);
+    }
+
+    /**
+     * @param string $field
+     * @return bool
+     */
+    protected function isIgnoredTaskChangeField($field)
+    {
+        return in_array($field, array('date_modification', 'date_moved', 'date_creation'), true);
+    }
+
+    /**
+     * @param string $field
+     * @param mixed  $oldValue
+     * @param mixed  $newValue
+     * @param array  $task
+     * @param bool   $hasPreviousTask
+     * @return string
+     */
+    protected function formatTaskChangeLine($field, $oldValue, $newValue, array $task, $hasPreviousTask)
+    {
+        if ($field === 'description') {
+            return $this->formatTaskDescriptionChange($oldValue, $newValue, $hasPreviousTask);
+        }
+
+        $label = $this->getTaskFieldLabel($field);
+        $newText = $this->formatTaskFieldValue($field, $newValue, $task);
+
+        if (! $hasPreviousTask) {
+            return $this->escapeMarkdown($label.': '.$newText);
+        }
+
+        $oldText = $this->formatTaskFieldValue($field, $oldValue, array());
+        if ($oldText === $newText) {
+            return '';
+        }
+
+        return $this->escapeMarkdown($label.': '.$oldText.' → '.$newText);
+    }
+
+    /**
+     * Summarize description changes without dumping the full body.
+     *
+     * Whitespace-only churn is hidden. Short single-line descriptions show the
+     * exact before/after; longer or multiline bodies show size movement only.
+     *
+     * @param mixed $oldValue
+     * @param mixed $newValue
+     * @param bool  $hasPreviousTask
+     * @return string
+     */
+    protected function formatTaskDescriptionChange($oldValue, $newValue, $hasPreviousTask)
+    {
+        $label = $this->getTaskFieldLabel('description');
+        $newText = (string) $newValue;
+
+        if (! $hasPreviousTask) {
+            return $this->escapeMarkdown($label.': '.$this->summarizeTextValue($newText));
+        }
+
+        $oldText = (string) $oldValue;
+        if ($this->normalizeTextForDiff($oldText) === $this->normalizeTextForDiff($newText)) {
+            return '';
+        }
+
+        if ($this->isSmallTextValue($oldText) && $this->isSmallTextValue($newText)) {
+            return $this->escapeMarkdown($label.': '.$oldText.' → '.$newText);
+        }
+
+        return $this->escapeMarkdown($label.': '.$this->getTextLength($oldText).' → '.$this->getTextLength($newText).' '.t('characters'));
+    }
+
+    /**
+     * @param string $text
+     * @return string
+     */
+    protected function normalizeTextForDiff($text)
+    {
+        return trim(preg_replace('/\s+/u', ' ', (string) $text));
+    }
+
+    /**
+     * @param string $text
+     * @return bool
+     */
+    protected function isSmallTextValue($text)
+    {
+        return strpos($text, "\n") === false && mb_strlen($text) <= 80;
+    }
+
+    /**
+     * @param string $text
+     * @return string
+     */
+    protected function summarizeTextValue($text)
+    {
+        if ($this->isSmallTextValue($text)) {
+            return (string) $text;
+        }
+
+        return $this->getTextLength($text).' '.t('characters');
+    }
+
+    /**
+     * @param string $text
+     * @return integer
+     */
+    protected function getTextLength($text)
+    {
+        return mb_strlen($this->normalizeTextForDiff($text));
+    }
+
+    /**
+     * @param string $field
+     * @return string
+     */
+    protected function getTaskFieldLabel($field)
+    {
         $labels = array(
             'title'          => t('Title'),
             'description'    => t('Description'),
@@ -358,6 +503,7 @@ class EmbedBuilder extends Base
             'color_id'       => t('Color'),
             'due_date'       => t('Due Date'),
             'date_due'       => t('Due Date'),
+            'date_started'   => t('Start Date'),
             'priority'       => t('Priority'),
             'category_id'    => t('Category'),
             'score'          => t('Complexity'),
@@ -367,11 +513,40 @@ class EmbedBuilder extends Base
             'swimlane_id'    => t('Swimlane'),
         );
 
-        return $this->formatChangedFields(
-            $eventData['changes'],
-            $labels,
-            array('date_modification', 'date_moved', 'date_creation')
-        );
+        return isset($labels[$field]) ? $labels[$field] : ucwords(str_replace('_', ' ', $field));
+    }
+
+    /**
+     * @param string $field
+     * @param mixed  $value
+     * @param array  $task
+     * @return string
+     */
+    protected function formatTaskFieldValue($field, $value, array $task)
+    {
+        if ($value === null || $value === '' || $value === 0 || $value === '0') {
+            return '—';
+        }
+
+        if (in_array($field, array('date_due', 'due_date', 'date_started'), true)) {
+            return is_numeric($value) ? date('Y-m-d', (int) $value) : (string) $value;
+        }
+
+        if (in_array($field, array('time_estimated', 'time_spent'), true)) {
+            return $this->formatHours((float) $value).'h';
+        }
+
+        if ($field === 'owner_id') {
+            if (! empty($task['assignee_name'])) {
+                return (string) $task['assignee_name'];
+            }
+            if (! empty($task['assignee_username'])) {
+                return (string) $task['assignee_username'];
+            }
+            return '#'.(string) $value;
+        }
+
+        return is_scalar($value) ? (string) $value : json_encode($value);
     }
 
     /**

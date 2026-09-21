@@ -154,6 +154,7 @@ Task rules 只能排除通知，不會啟用專案層級已關閉的 Discord eve
 - **Title** 一律標示任務：`#<id> · <task title>`。
 - **Description** 一律先以完整動作句開頭（誰做了什麼，例如「Alice moved the task #42 to the column In Progress」）。
 - 對**新留言**，top-level Discord message content 會保留 Kanboard 留言正文，並將可解析的 `@username` token 在原位置替換成 Discord mention，因此頻道 preview 與 push notification 能直接看到留言文字。
+- 對**任務更新**，內容區會列出變更欄位與精簡欄位值（`舊值 → 新值`，有舊值時）。長篇描述只顯示長度差異，不直接貼入頻道。
 - 對其他 free-text events，可選擇在狀態句下方顯示**內容摘要**（任務描述 / 留言更新或刪除 / 子任務文字），並依設定長度裁切。
 
 Embed 摘要長度可在專案的 **Settings > Integrations > Discord > Content excerpt length** 設定：
