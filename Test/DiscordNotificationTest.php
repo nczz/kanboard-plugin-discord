@@ -73,6 +73,30 @@ class DiscordNotificationTest extends Base
         );
     }
 
+    private function subtaskUpdateEvent($projectId, array $changes, $taskId = 701)
+    {
+        return array(
+            'task' => array(
+                'id' => $taskId,
+                'project_id' => $projectId,
+                'project_name' => 'Subtask Matrix',
+                'title' => 'Parent task',
+                'owner_id' => 0,
+            ),
+            'subtask' => array(
+                'id' => 3,
+                'task_id' => $taskId,
+                'title' => 'Checklist item',
+                'status' => 1,
+                'status_name' => 'In progress',
+                'name' => '',
+                'username' => '',
+                'user_id' => 0,
+            ),
+            'changes' => $changes,
+        );
+    }
+
     private function createTask($projectId, $title = 'Task', array $values = array())
     {
         $taskCreationModel = new TaskCreationModel($this->container);
@@ -767,6 +791,77 @@ class DiscordNotificationTest extends Base
             ))
         );
     }
+
+    public function testNoisySubtaskUpdatesAreDiscordOffAndEmailSuppressedByDefault()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+        $email = $this->mockEmail();
+        $email->expects($this->never())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'subtask-default-off'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+        $eventData = $this->subtaskUpdateEvent($projectId, array('title' => 'Old title'));
+
+        $discord = new DiscordNotification($this->container);
+        $discord->notifyProject($projectModel->getById($projectId), \Kanboard\Model\SubtaskModel::EVENT_UPDATE, $eventData);
+
+        $emailNotification = new ConditionalMailNotification($this->container);
+        $emailNotification->notifyUser($this->emailUser(), \Kanboard\Model\SubtaskModel::EVENT_UPDATE, $eventData);
+    }
+
+    public function testSubtaskCompletionIsDiscordOnAndEmailAllowedByDefault()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->once())->method('postJson');
+        $email = $this->mockEmail();
+        $email->expects($this->once())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'subtask-done-default-on'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+        $eventData = $this->subtaskUpdateEvent($projectId, array('status' => \Kanboard\Model\SubtaskModel::STATUS_TODO));
+        $eventData['subtask']['status'] = \Kanboard\Model\SubtaskModel::STATUS_DONE;
+        $eventData['subtask']['status_name'] = 'Done';
+
+        $discord = new DiscordNotification($this->container);
+        $discord->notifyProject($projectModel->getById($projectId), \Kanboard\Model\SubtaskModel::EVENT_UPDATE, $eventData);
+
+        $emailNotification = new ConditionalMailNotification($this->container);
+        $emailNotification->notifyUser($this->emailUser(), \Kanboard\Model\SubtaskModel::EVENT_UPDATE, $eventData);
+    }
+
+    public function testProjectCanOptIntoNoisySubtaskUpdates()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->once())->method('postJson');
+        $email = $this->mockEmail();
+        $email->expects($this->once())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'subtask-opt-in'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('subtask_update_title') => '1',
+            EventRegistry::getSuppressEmailProjectMetadataKey('subtask_update_title') => '0',
+        ));
+        $eventData = $this->subtaskUpdateEvent($projectId, array('title' => 'Old title'));
+
+        $discord = new DiscordNotification($this->container);
+        $discord->notifyProject($projectModel->getById($projectId), \Kanboard\Model\SubtaskModel::EVENT_UPDATE, $eventData);
+
+        $emailNotification = new ConditionalMailNotification($this->container);
+        $emailNotification->notifyUser($this->emailUser(), \Kanboard\Model\SubtaskModel::EVENT_UPDATE, $eventData);
+    }
+
 
     public function testMoveEventFilterAllowsExplicitlyEnabledMove()
     {
@@ -1663,6 +1758,7 @@ class DiscordNotificationTest extends Base
         $projectId = $projectModel->create(array('name' => 'ST'));
         $this->container['projectMetadataModel']->save($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('subtask_update_time_tracking') => '1',
         ));
 
         $captured = null;
@@ -1700,6 +1796,125 @@ class DiscordNotificationTest extends Base
         // Update event lists what changed (Status, Time spent), not internal keys.
         $this->assertStringContainsString('Changed', $desc);
         $this->assertStringContainsString('Status', $desc);
+    }
+
+    public function testSubtaskStatusUpdateCanBeDisabledSeparately()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'subtask-status-off'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('subtask_update_status_inprogress') => '0',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\SubtaskModel::EVENT_UPDATE,
+            $this->subtaskUpdateEvent($projectId, array('status' => 0))
+        );
+    }
+
+    public function testLegacySubtaskStatusSettingStillControlsSplitStatusRows()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->never())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'subtask-status-legacy-off'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('subtask_update_status') => '0',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\SubtaskModel::EVENT_UPDATE,
+            $this->subtaskUpdateEvent($projectId, array('status' => 0))
+        );
+    }
+
+    public function testMixedSubtaskUpdateStillSendsWhenOneMatchingRowIsEnabled()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+        $http->expects($this->once())->method('postJson');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'subtask-mixed'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            EventRegistry::getDiscordProjectMetadataKey('subtask_update_status_inprogress') => '0',
+            EventRegistry::getDiscordProjectMetadataKey('subtask_update_title') => '1',
+        ));
+
+        $notification = new DiscordNotification($this->container);
+        $notification->notifyProject(
+            $projectModel->getById($projectId),
+            \Kanboard\Model\SubtaskModel::EVENT_UPDATE,
+            $this->subtaskUpdateEvent($projectId, array('status' => 0, 'title' => 'Old title'))
+        );
+    }
+
+    public function testSubtaskStatusEmailSuppressionDoesNotSuppressMixedTitleUpdate()
+    {
+        $this->loadPlugin();
+        $email = $this->mockEmail();
+        $email->expects($this->once())->method('send');
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'subtask-email-mixed'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            EventRegistry::getSuppressEmailProjectMetadataKey('subtask_update_status_inprogress') => '1',
+            EventRegistry::getSuppressEmailProjectMetadataKey('subtask_update_title') => '0',
+        ));
+
+        $notification = new ConditionalMailNotification($this->container);
+        $notification->notifyUser(
+            $this->emailUser(),
+            \Kanboard\Model\SubtaskModel::EVENT_UPDATE,
+            $this->subtaskUpdateEvent($projectId, array('status' => 0, 'title' => 'Old title'))
+        );
+    }
+
+    public function testCoreSubtaskUpdateEventCarriesChangedFields()
+    {
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'subtask-core-changes'));
+        $taskId = $this->createTask($projectId, 'Parent task');
+        $subtaskId = $this->container['subtaskModel']->create(array(
+            'task_id' => $taskId,
+            'title' => 'Checklist item',
+            'status' => \Kanboard\Model\SubtaskModel::STATUS_TODO,
+            'user_id' => 0,
+        ));
+
+        $captured = array();
+        $this->dispatcher->addListener(\Kanboard\Model\SubtaskModel::EVENT_UPDATE, function ($event) use (&$captured) {
+            $captured = $event->getAll();
+        });
+
+        $this->assertTrue($this->container['subtaskModel']->update(array(
+            'id' => $subtaskId,
+            'task_id' => $taskId,
+            'title' => 'Checklist item updated',
+            'status' => \Kanboard\Model\SubtaskModel::STATUS_DONE,
+            'user_id' => 0,
+        )));
+
+        $this->assertArrayHasKey('changes', $captured);
+        $this->assertArrayHasKey('title', $captured['changes']);
+        $this->assertArrayHasKey('status', $captured['changes']);
+        $this->assertSame(
+            array('subtask_update_title', 'subtask_update_status_done'),
+            EventRegistry::getEventKeysForEvent(\Kanboard\Model\SubtaskModel::EVENT_UPDATE, $captured)
+        );
     }
 
     public function testSubtaskDetailShownEvenWhenExcerptDisabled()

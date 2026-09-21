@@ -111,12 +111,12 @@ AND task does not mute Email for this event
 - Tasks：create、update、assignee change、close、reopen、overdue。
 - Task moves：project、column、column position、swimlane。Discord 預設不勾選，因為看板拖曳與排序事件通常較吵。
 - Comments：create、update、delete。
-- Subtasks：create、update、delete。
+- Subtasks：create、title change、status to todo、status to in progress、status to done、assignee change、time tracking change、other update、delete。一次更新若同時包含多個子任務欄位，只有在所有符合的細項都被停用、排除或抑制時才會靜音。
 - Files：attach、remove。
 - Internal links：create/update、remove。
 - Mentions：task description @mentions、comment @mentions。
 
-大多數 Discord events 預設啟用。Task move Discord events 預設停用，直到明確勾選。舊版較粗的 close/open、assignee changes、internal links、task description mentions 設定，會在能清楚對應的地方保留相容；move events 不會因舊的 `task_update` 設定而自動啟用。
+大多數 Discord events 預設啟用。Task move Discord events 預設停用，直到明確勾選。Subtask Discord 預設刻意更安靜：create、status-to-done、delete 會啟用；title/status-to-todo/status-to-in-progress/assignee/time/other updates 預設停用，且 **Suppress Email** 預設勾選。舊版較粗的 close/open、assignee changes、internal links、task description mentions、舊版單一 subtask update 設定，以及舊版單一 subtask status 設定，會在能清楚對應的地方保留相容；move events 不會因舊的 `task_update` 設定而自動啟用。
 
 Email suppression 是設定式規則，不是 Discord 成功後的 fallback。只要勾選 **Suppress Email**，符合該事件的 Kanboard Email 通知就不會寄出，即使後續 Discord delivery 失敗也一樣。這個外掛不會改動每個使用者的 Email checkbox；它只會針對符合規則的事件抑制 delivery。
 

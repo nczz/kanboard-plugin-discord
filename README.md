@@ -138,16 +138,22 @@ Supported event rows:
 - Task moves: project, column, column position, swimlane. Discord is unchecked
   by default because board drag/reorder activity is usually noisy.
 - Comments: create, update, delete.
-- Subtasks: create, update, delete.
+- Subtasks: create, title change, status to todo, status to in progress, status
+  to done, assignee change, time tracking change, other update, delete. A mixed
+  update is sent unless every matching subtask-update row is disabled/muted/suppressed.
 - Files: attach, remove.
 - Internal links: create/update, remove.
 - Mentions: task description @mentions and comment @mentions.
 
 Most Discord events are enabled by default. Task move Discord events are disabled
-until explicitly checked. Older coarse settings for close/open, assignee changes,
-internal links and task description mentions are still honored where they map
-cleanly to the split events; move events remain off unless their new individual
-move toggles are checked.
+until explicitly checked. Subtask Discord defaults are intentionally quieter:
+create, status-to-done and delete are enabled; title/status-to-todo/status-to-in
+progress/assignee/time/other updates are disabled and have **Suppress Email**
+checked by default. Older coarse settings for close/open, assignee changes,
+internal links, task description mentions, the former single subtask update row,
+and the former single subtask status row are still honored where they map cleanly
+to the split events; move events remain off unless their new individual move
+toggles are checked.
 
 Email suppression is a setting-based rule, not a Discord-success fallback. If
 **Suppress Email** is checked, Kanboard Email notifications for that event are

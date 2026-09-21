@@ -47,7 +47,13 @@ class EventRegistry
             ),
             t('Subtasks') => array(
                 'subtask_create' => t('Subtask created'),
-                'subtask_update' => t('Subtask updated'),
+                'subtask_update_title' => t('Subtask title changed'),
+                'subtask_update_status_todo' => t('Subtask marked todo'),
+                'subtask_update_status_inprogress' => t('Subtask marked in progress'),
+                'subtask_update_status_done' => t('Subtask completed'),
+                'subtask_update_assignee' => t('Subtask assignee changed'),
+                'subtask_update_time_tracking' => t('Subtask time tracking changed'),
+                'subtask_update_other' => t('Other subtask update'),
                 'subtask_delete' => t('Subtask deleted'),
             ),
             t('Files') => array(
@@ -140,6 +146,91 @@ class EventRegistry
     }
 
     /**
+     * Map a Kanboard event instance to one or more notification-rule keys.
+     *
+     * Subtask updates are field-aware: a single core subtask.update event can
+     * carry multiple changed fields, and each field category has its own rule.
+     *
+     * @param string $eventName
+     * @param array  $eventData
+     * @return string[]
+     */
+    public static function getEventKeysForEvent($eventName, array $eventData = array())
+    {
+        if ($eventName === SubtaskModel::EVENT_UPDATE || $eventName === SubtaskModel::EVENT_CREATE_UPDATE) {
+            return self::getSubtaskUpdateEventKeys($eventData);
+        }
+
+        $eventKey = self::getEventKey($eventName);
+        return $eventKey === '' ? array() : array($eventKey);
+    }
+
+    /**
+     * Return the granular subtask-update rule keys matching the changed fields.
+     *
+     * @param array $eventData
+     * @return string[]
+     */
+    protected static function getSubtaskUpdateEventKeys(array $eventData)
+    {
+        if (empty($eventData['changes']) || ! is_array($eventData['changes'])) {
+            return array('subtask_update_other');
+        }
+
+        $keys = array();
+        foreach (array_keys($eventData['changes']) as $field) {
+            switch ($field) {
+                case 'title':
+                    $keys[] = 'subtask_update_title';
+                    break;
+                case 'status':
+                    $keys[] = self::getSubtaskStatusUpdateEventKey($eventData);
+                    break;
+                case 'user_id':
+                    $keys[] = 'subtask_update_assignee';
+                    break;
+                case 'time_estimated':
+                case 'time_spent':
+                    $keys[] = 'subtask_update_time_tracking';
+                    break;
+                case 'id':
+                case 'task_id':
+                case 'position':
+                    break;
+                default:
+                    $keys[] = 'subtask_update_other';
+            }
+        }
+
+        $keys = array_values(array_unique($keys));
+        return empty($keys) ? array('subtask_update_other') : $keys;
+    }
+
+    /**
+     * Return the subtask status-transition rule key for the resulting status.
+     *
+     * @param array $eventData
+     * @return string
+     */
+    protected static function getSubtaskStatusUpdateEventKey(array $eventData)
+    {
+        if (! isset($eventData['subtask']['status'])) {
+            return 'subtask_update_status';
+        }
+
+        switch ((int) $eventData['subtask']['status']) {
+            case SubtaskModel::STATUS_TODO:
+                return 'subtask_update_status_todo';
+            case SubtaskModel::STATUS_INPROGRESS:
+                return 'subtask_update_status_inprogress';
+            case SubtaskModel::STATUS_DONE:
+                return 'subtask_update_status_done';
+            default:
+                return 'subtask_update_status';
+        }
+    }
+
+    /**
      * Map split event keys back to coarse keys used by earlier plugin versions.
      *
      * @param string $eventKey
@@ -148,6 +239,16 @@ class EventRegistry
     public static function getLegacyEventKey($eventKey)
     {
         switch ($eventKey) {
+            case 'subtask_update_status_todo':
+            case 'subtask_update_status_inprogress':
+            case 'subtask_update_status_done':
+                return 'subtask_update_status';
+            case 'subtask_update_title':
+            case 'subtask_update_status':
+            case 'subtask_update_assignee':
+            case 'subtask_update_time_tracking':
+            case 'subtask_update_other':
+                return 'subtask_update';
             case 'task_assignee_change':
                 return 'task_update';
             case 'task_close':
@@ -164,15 +265,56 @@ class EventRegistry
     }
 
     /**
-     * Discord event defaults: all enabled except noisy task moves. Comment
-     * mention Discord is handled by comment_create cards, not a separate card.
+     * Map split event keys back through every older coarse key they can inherit.
+     *
+     * @param string $eventKey
+     * @return string[]
+     */
+    public static function getLegacyEventKeys($eventKey)
+    {
+        $keys = array();
+
+        $legacyKey = self::getLegacyEventKey($eventKey);
+        while ($legacyKey !== '' && ! in_array($legacyKey, $keys, true)) {
+            $keys[] = $legacyKey;
+            $legacyKey = self::getLegacyEventKey($legacyKey);
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    /**
+     * Discord event defaults: all enabled except noisy task moves and noisy
+     * subtask updates. For subtasks, only create, completion and delete are
+     * Discord-on by default.
      *
      * @param string $eventKey
      * @return bool
      */
     public static function isDiscordEventDefaultEnabled($eventKey)
     {
-        return self::supportsDiscordProjectEvent($eventKey) && strpos($eventKey, 'task_move_') !== 0;
+        if (! self::supportsDiscordProjectEvent($eventKey) || strpos($eventKey, 'task_move_') === 0) {
+            return false;
+        }
+
+        if (strpos($eventKey, 'subtask_') === 0) {
+            return in_array($eventKey, self::getDefaultNotifiedSubtaskEventKeys(), true);
+        }
+
+        return true;
+    }
+
+    /**
+     * Project Email suppression defaults. Noisy subtask updates are suppressed
+     * by default so only subtask create, completion and delete produce project
+     * notifications unless a project opts in.
+     *
+     * @param string $eventKey
+     * @return bool
+     */
+    public static function isProjectEmailSuppressionDefaultEnabled($eventKey)
+    {
+        return in_array($eventKey, self::getDefaultSuppressedSubtaskEventKeys(), true);
     }
 
     /**
@@ -236,8 +378,7 @@ class EventRegistry
             return (string) $metadata[$metadataKey] === '1';
         }
 
-        $legacyKey = self::getLegacyEventKey($eventKey);
-        if ($legacyKey !== '') {
+        foreach (self::getLegacyEventKeys($eventKey) as $legacyKey) {
             $legacyMetadataKey = self::getDiscordProjectMetadataKey($legacyKey);
             if (array_key_exists($legacyMetadataKey, $metadata)) {
                 return (string) $metadata[$legacyMetadataKey] === '1';
@@ -254,8 +395,9 @@ class EventRegistry
      */
     public static function isProjectEmailSuppressed($eventKey, array $metadata)
     {
-        $metadataKey = self::getSuppressEmailProjectMetadataKey($eventKey);
-        return array_key_exists($metadataKey, $metadata) && (string) $metadata[$metadataKey] === '1';
+        return self::isMetadataEnabled($eventKey, $metadata, self::META_SUPPRESS_EMAIL_PREFIX)
+            || (! self::hasMetadataOverride($eventKey, $metadata, self::META_SUPPRESS_EMAIL_PREFIX)
+                && self::isProjectEmailSuppressionDefaultEnabled($eventKey));
     }
 
     /**
@@ -265,8 +407,7 @@ class EventRegistry
      */
     public static function isTaskDiscordMuted($eventKey, array $metadata)
     {
-        $metadataKey = self::getTaskMuteDiscordMetadataKey($eventKey);
-        return array_key_exists($metadataKey, $metadata) && (string) $metadata[$metadataKey] === '1';
+        return self::isMetadataEnabled($eventKey, $metadata, self::META_TASK_MUTE_DISCORD_PREFIX);
     }
 
     /**
@@ -276,7 +417,82 @@ class EventRegistry
      */
     public static function isTaskEmailMuted($eventKey, array $metadata)
     {
-        $metadataKey = self::getTaskMuteEmailMetadataKey($eventKey);
-        return array_key_exists($metadataKey, $metadata) && (string) $metadata[$metadataKey] === '1';
+        return self::isMetadataEnabled($eventKey, $metadata, self::META_TASK_MUTE_EMAIL_PREFIX);
+    }
+
+    /**
+     * Read a boolean metadata flag, allowing new split keys to inherit an older
+     * coarse setting until the project/task stores an explicit split-key value.
+     *
+     * @param string $eventKey
+     * @param array  $metadata
+     * @param string $prefix
+     * @return bool
+     */
+    protected static function isMetadataEnabled($eventKey, array $metadata, $prefix)
+    {
+        $metadataKey = $prefix.$eventKey;
+        if (array_key_exists($metadataKey, $metadata)) {
+            return (string) $metadata[$metadataKey] === '1';
+        }
+
+        foreach (self::getLegacyEventKeys($eventKey) as $legacyKey) {
+            $legacyMetadataKey = $prefix.$legacyKey;
+            if (array_key_exists($legacyMetadataKey, $metadata)) {
+                return (string) $metadata[$legacyMetadataKey] === '1';
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Return true when metadata explicitly stores this key or any legacy key.
+     *
+     * @param string $eventKey
+     * @param array  $metadata
+     * @param string $prefix
+     * @return bool
+     */
+    protected static function hasMetadataOverride($eventKey, array $metadata, $prefix)
+    {
+        if (array_key_exists($prefix.$eventKey, $metadata)) {
+            return true;
+        }
+
+        foreach (self::getLegacyEventKeys($eventKey) as $legacyKey) {
+            if (array_key_exists($prefix.$legacyKey, $metadata)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return string[]
+     */
+    protected static function getDefaultNotifiedSubtaskEventKeys()
+    {
+        return array(
+            'subtask_create',
+            'subtask_update_status_done',
+            'subtask_delete',
+        );
+    }
+
+    /**
+     * @return string[]
+     */
+    protected static function getDefaultSuppressedSubtaskEventKeys()
+    {
+        return array(
+            'subtask_update_title',
+            'subtask_update_status_todo',
+            'subtask_update_status_inprogress',
+            'subtask_update_assignee',
+            'subtask_update_time_tracking',
+            'subtask_update_other',
+        );
     }
 }

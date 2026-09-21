@@ -49,19 +49,19 @@ class ConditionalMailNotification extends Base implements NotificationInterface
      */
     protected function filterEventData($eventName, array $eventData)
     {
-        $eventKey = EventRegistry::getEventKey($eventName);
+        $eventKeys = EventRegistry::getEventKeysForEvent($eventName, $eventData);
 
-        if ($eventKey === '') {
+        if (empty($eventKeys)) {
             return $eventData;
         }
 
         if ($eventName === TaskModel::EVENT_OVERDUE && ! empty($eventData['tasks']) && is_array($eventData['tasks'])) {
-            return $this->filterOverdueEventData($eventKey, $eventData);
+            return $this->filterOverdueEventData($eventKeys, $eventData);
         }
 
         $task = isset($eventData['task']) && is_array($eventData['task']) ? $eventData['task'] : array();
 
-        if (! empty($task) && $this->isEmailSuppressedForTask($task, $eventKey)) {
+        if (! empty($task) && $this->isEmailSuppressedForTask($task, $eventKeys)) {
             return null;
         }
 
@@ -71,17 +71,17 @@ class ConditionalMailNotification extends Base implements NotificationInterface
     /**
      * Filter suppressed tasks from an overdue batch.
      *
-     * @param string $eventKey
-     * @param array  $eventData
+     * @param string[] $eventKeys
+     * @param array    $eventData
      * @return array|null
      */
-    protected function filterOverdueEventData($eventKey, array $eventData)
+    protected function filterOverdueEventData(array $eventKeys, array $eventData)
     {
         $tasks = array();
         $projectNames = array();
 
         foreach ($eventData['tasks'] as $task) {
-            if (! is_array($task) || $this->isEmailSuppressedForTask($task, $eventKey)) {
+            if (! is_array($task) || $this->isEmailSuppressedForTask($task, $eventKeys)) {
                 continue;
             }
 
@@ -104,29 +104,29 @@ class ConditionalMailNotification extends Base implements NotificationInterface
     }
 
     /**
-     * @param array  $task
-     * @param string $eventKey
+     * @param array    $task
+     * @param string[] $eventKeys
      * @return bool
      */
-    protected function isEmailSuppressedForTask(array $task, $eventKey)
+    protected function isEmailSuppressedForTask(array $task, array $eventKeys)
     {
         if (empty($task['project_id'])) {
             return false;
         }
 
         $projectMetadata = $this->projectMetadataModel->getAll((int) $task['project_id']);
-        if (EventRegistry::isProjectEmailSuppressed($eventKey, $projectMetadata)) {
-            return true;
-        }
+        $taskMetadata = ! empty($task['id'])
+            ? $this->taskMetadataModel->getAll((int) $task['id'])
+            : array();
 
-        if (! empty($task['id'])) {
-            $taskMetadata = $this->taskMetadataModel->getAll((int) $task['id']);
-            if (EventRegistry::isTaskEmailMuted($eventKey, $taskMetadata)) {
-                return true;
+        foreach ($eventKeys as $eventKey) {
+            if (! EventRegistry::isProjectEmailSuppressed($eventKey, $projectMetadata)
+                && ! EventRegistry::isTaskEmailMuted($eventKey, $taskMetadata)) {
+                return false;
             }
         }
 
-        return false;
+        return true;
     }
 
     /**

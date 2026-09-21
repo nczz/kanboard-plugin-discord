@@ -312,7 +312,7 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     public function notifyProject(array $project, $eventName, array $eventData)
     {
-        if (! $this->isEventEnabled($project['id'], $eventName)) {
+        if (! $this->isEventEnabled($project['id'], $eventName, $eventData)) {
             return;
         }
 
@@ -324,12 +324,11 @@ class DiscordNotification extends Base implements NotificationInterface
         // EVENT_OVERDUE carries a list of tasks instead of a single task.
         if ($eventName === TaskModel::EVENT_OVERDUE && ! empty($eventData['tasks'])) {
             foreach ($eventData['tasks'] as $task) {
-                if ($this->isTaskMuted($eventName, $task)) {
-                    continue;
-                }
-
                 $singleEvent = $eventData;
                 $singleEvent['task'] = $task;
+                if ($this->isTaskMuted($eventName, $task, $singleEvent)) {
+                    continue;
+                }
                 // Reduce the tasks list to this single task so the core title
                 // builder (which reads $eventData['tasks'] for overdue events)
                 // renders THIS task instead of the aggregate count / first task.
@@ -340,7 +339,7 @@ class DiscordNotification extends Base implements NotificationInterface
             return;
         }
 
-        if (! empty($eventData['task']) && $this->isTaskMuted($eventName, $eventData['task'])) {
+        if (! empty($eventData['task']) && $this->isTaskMuted($eventName, $eventData['task'], $eventData)) {
             return;
         }
 
@@ -514,15 +513,21 @@ class DiscordNotification extends Base implements NotificationInterface
      * @param  string  $eventName
      * @return boolean
      */
-    protected function isEventEnabled($projectId, $eventName)
+    protected function isEventEnabled($projectId, $eventName, array $eventData = array())
     {
-        $eventKey = EventRegistry::getEventKey($eventName);
-
-        if ($eventKey === '') {
+        $eventKeys = EventRegistry::getEventKeysForEvent($eventName, $eventData);
+        if (empty($eventKeys)) {
             return false;
         }
 
-        return EventRegistry::isDiscordProjectEventEnabled($eventKey, $this->projectMetadataModel->getAll($projectId));
+        $metadata = $this->projectMetadataModel->getAll($projectId);
+        foreach ($eventKeys as $eventKey) {
+            if (EventRegistry::isDiscordProjectEventEnabled($eventKey, $metadata)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -545,18 +550,32 @@ class DiscordNotification extends Base implements NotificationInterface
      * @param  array  $task
      * @return boolean
      */
-    protected function isTaskMuted($eventName, array $task)
+    protected function isTaskMuted($eventName, array $task, array $eventData = array())
     {
         if (empty($task['id'])) {
             return false;
         }
 
-        $eventKey = EventRegistry::getEventKey($eventName);
-        if ($eventKey === '') {
+        $eventKeys = EventRegistry::getEventKeysForEvent($eventName, $eventData);
+        if (empty($eventKeys)) {
             return false;
         }
 
-        return EventRegistry::isTaskDiscordMuted($eventKey, $this->taskMetadataModel->getAll((int) $task['id']));
+        $taskMetadata = $this->taskMetadataModel->getAll((int) $task['id']);
+        $projectMetadata = empty($task['project_id'])
+            ? array()
+            : $this->projectMetadataModel->getAll((int) $task['project_id']);
+
+        foreach ($eventKeys as $eventKey) {
+            $projectEnabled = empty($task['project_id'])
+                || EventRegistry::isDiscordProjectEventEnabled($eventKey, $projectMetadata);
+
+            if ($projectEnabled && ! EventRegistry::isTaskDiscordMuted($eventKey, $taskMetadata)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
