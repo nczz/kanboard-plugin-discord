@@ -44,6 +44,14 @@ class Plugin extends Base
      */
     public function initialize()
     {
+        // Plugin-owned service overrides keep clean Kanboard core compatible:
+        // - TaskEventJob exposes the previous task row already passed by core.
+        // - SubtaskModel (registered in getClasses) preserves previous subtask
+        //   values before core dispatches subtask.update.
+        $this->container['taskEventJob'] = $this->container->factory(function ($container) {
+            return new \Kanboard\Plugin\Discord\Job\TaskEventJob($container);
+        });
+
         // Register the Discord notification type as a project notification.
         // It is registered as "hidden" so that it is always evaluated for every
         // project. Whether a message is actually sent is gated by the presence
@@ -240,6 +248,9 @@ class Plugin extends Base
         return array(
             'Plugin\Discord\Builder' => array(
                 'EmbedBuilder',
+            ),
+            'Plugin\Discord\Model' => array(
+                'SubtaskModel',
             ),
         );
     }

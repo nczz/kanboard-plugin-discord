@@ -1885,6 +1885,7 @@ class DiscordNotificationTest extends Base
 
     public function testCoreSubtaskUpdateEventCarriesChangedFields()
     {
+        $this->loadPlugin();
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'subtask-core-changes'));
         $taskId = $this->createTask($projectId, 'Parent task');
@@ -2049,6 +2050,7 @@ class DiscordNotificationTest extends Base
 
     public function testCoreTaskUpdateEventCarriesPreviousTask()
     {
+        $this->loadPlugin();
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'task-core-changes'));
         $taskId = $this->createTask($projectId, 'Task', array('priority' => 1, 'time_estimated' => 1));
