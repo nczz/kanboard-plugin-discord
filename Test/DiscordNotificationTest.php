@@ -2042,10 +2042,54 @@ class DiscordNotificationTest extends Base
         $this->assertStringContainsString('Time spent: — → 0.25h', $desc);
         $this->assertStringContainsString('Owner Ms: alice → bob', $desc);
         $this->assertStringContainsString('Description:', $desc);
-        $this->assertStringContainsString('characters', $desc);
+        $this->assertStringContainsString('Added content', $desc);
         $this->assertStringNotContainsString('old body noise', $desc);
         $this->assertStringNotContainsString('new body signal', $desc);
         $this->assertStringNotContainsString('date_modification', $desc);
+    }
+
+    public function testTaskDescriptionLongTextSummariesUseIntentLabels()
+    {
+        $this->loadPlugin();
+        $http = $this->mockHttp();
+
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'DESC'));
+        $this->container['projectMetadataModel']->save($projectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+        ));
+
+        $captured = array();
+        $http->expects($this->exactly(3))->method('postJson')
+            ->willReturnCallback(function ($url, $payload) use (&$captured) {
+                $captured[] = $payload;
+                return '';
+            });
+
+        $notification = new DiscordNotification($this->container);
+        $cases = array(
+            array(str_repeat('A', 120), str_repeat('A', 140), 'Added content'),
+            array(str_repeat('B', 140), str_repeat('B', 120), 'Removed content'),
+            array(str_repeat('C', 120), str_repeat('C', 118).'DD', 'Adjusted wording'),
+        );
+
+        foreach ($cases as $case) {
+            $notification->notifyProject(
+                $projectModel->getById($projectId),
+                \Kanboard\Model\TaskModel::EVENT_UPDATE,
+                array(
+                    'task' => array('id' => 12, 'project_id' => $projectId, 'project_name' => 'DESC', 'title' => 'T', 'owner_id' => 0),
+                    'previous_task' => array('description' => $case[0]),
+                    'changes' => array('description' => $case[1]),
+                )
+            );
+        }
+
+        foreach ($cases as $index => $case) {
+            $desc = $captured[$index]['embeds'][0]['description'];
+            $this->assertStringContainsString('Description: '.$case[2], $desc);
+            $this->assertStringNotContainsString('characters', $desc);
+        }
     }
 
     public function testCoreTaskUpdateEventCarriesPreviousTask()

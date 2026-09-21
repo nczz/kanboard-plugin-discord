@@ -447,7 +447,27 @@ class EmbedBuilder extends Base
             return $this->escapeMarkdown($label.': '.$oldText.' → '.$newText);
         }
 
-        return $this->escapeMarkdown($label.': '.$this->getTextLength($oldText).' → '.$this->getTextLength($newText).' '.t('characters'));
+        return $this->escapeMarkdown($label.': '.$this->getDescriptionChangeSummary($oldText, $newText));
+    }
+
+    /**
+     * Convert long description size movement into user-facing intent.
+     *
+     * @param string $oldText
+     * @param string $newText
+     * @return string
+     */
+    protected function getDescriptionChangeSummary($oldText, $newText)
+    {
+        $oldLength = $this->getTextLength($oldText);
+        $newLength = $this->getTextLength($newText);
+        $delta = $newLength - $oldLength;
+
+        if (abs($delta) <= 5) {
+            return t('Adjusted wording');
+        }
+
+        return $delta > 0 ? t('Added content') : t('Removed content');
     }
 
     /**

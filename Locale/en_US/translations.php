@@ -77,6 +77,9 @@ return array(
     'Assignee' => 'Assignee',
     'Column' => 'Column',
     'Changed' => 'Changed',
+    'Added content' => 'Added content',
+    'Removed content' => 'Removed content',
+    'Adjusted wording' => 'Adjusted wording',
     'characters' => 'characters',
     'Save' => 'Save',
 );

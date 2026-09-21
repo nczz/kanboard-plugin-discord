@@ -69,6 +69,9 @@ return array(
     'Assignee' => '負責人',
     'Column' => '欄位',
     'Changed' => '變更欄位',
+    'Added content' => '補充了內容',
+    'Removed content' => '刪減了內容',
+    'Adjusted wording' => '調整用字',
     'characters' => '字元',
     'Save' => '儲存',
 );
