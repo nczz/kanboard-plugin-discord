@@ -32,6 +32,16 @@ return array(
         => 'Choose which Kanboard events should be sent to Discord and which Email notifications should be suppressed.',
     'Suppressing Email does not require Discord to be enabled. If Discord is also disabled, the event is muted for both Discord and Email.'
         => 'Suppressing Email does not require Discord to be enabled. If Discord is also disabled, the event is muted for both Discord and Email.',
+    'Configure the Discord webhook URL, content excerpt length and notification events for this project.'
+        => 'Configure the Discord webhook URL, content excerpt length and notification events for this project.',
+    'Configure your Discord User ID used for mentions in Discord notifications.'
+        => 'Configure your Discord User ID used for mentions in Discord notifications.',
+    'Configure Discord' => 'Configure Discord',
+    'Invalid Discord webhook URL.' => 'Invalid Discord webhook URL.',
+    'Private network webhook URLs are not allowed.' => 'Private network webhook URLs are not allowed.',
+    'The excerpt length must be a positive integer.' => 'The excerpt length must be a positive integer.',
+    'The excerpt length is too large.' => 'The excerpt length is too large.',
+    'The Discord User ID must be numeric.' => 'The Discord User ID must be numeric.',
     'Task created' => 'Task created',
     'Task updated' => 'Task updated',
     'Task assignee changed' => 'Task assignee changed',

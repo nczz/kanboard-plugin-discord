@@ -24,6 +24,16 @@ return array(
         => '選擇哪些 Kanboard 事件要送到 Discord，以及哪些 Email 通知要被抑制。',
     'Suppressing Email does not require Discord to be enabled. If Discord is also disabled, the event is muted for both Discord and Email.'
         => '抑制 Email 不需要啟用 Discord。如果 Discord 也關閉，這個事件就會同時對 Discord 與 Email 靜音。',
+    'Configure the Discord webhook URL, content excerpt length and notification events for this project.'
+        => '設定此專案的 Discord webhook 網址、內容摘要長度與通知事件。',
+    'Configure your Discord User ID used for mentions in Discord notifications.'
+        => '設定在 Discord 通知中用於提及你的 Discord 使用者 ID。',
+    'Configure Discord' => '設定 Discord',
+    'Invalid Discord webhook URL.' => 'Discord webhook 網址無效。',
+    'Private network webhook URLs are not allowed.' => '不允許使用私有網路 webhook 網址。',
+    'The excerpt length must be a positive integer.' => '摘要長度必須是正整數。',
+    'The excerpt length is too large.' => '摘要長度過大。',
+    'The Discord User ID must be numeric.' => 'Discord 使用者 ID 必須是數字。',
     'Task created' => '建立任務',
     'Task updated' => '更新任務',
     'Task assignee changed' => '變更任務負責人',
