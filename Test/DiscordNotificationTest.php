@@ -213,6 +213,18 @@ class DiscordNotificationTest extends Base
         $this->assertArrayHasKey(DiscordNotification::TYPE, $userTypes);
     }
 
+    public function testUserIntegrationTemplateLinksToPluginSettings()
+    {
+        $this->loadPlugin();
+
+        $html = $this->container['template']->render('discord:user/integration', array(
+            'user' => array('id' => 42),
+        ));
+
+        $this->assertStringContainsString('UserIntegrationController', $html);
+        $this->assertStringContainsString('user_id=42', $html);
+    }
+
     public function testPluginOverridesEmailTypeWithConditionalWrapper()
     {
         $this->loadPlugin();
