@@ -50,8 +50,7 @@ class EmbedBuilder extends Base
      * Default length (characters) for the task content excerpt shown in the
      * card (task description / comment / subtask title). Kept short on purpose
      * so notifications convey status without flooding the channel with content.
-     *
-     * Overridable per-project via project metadata "discord_excerpt_length",
+     * Overridable per-project via discord_project_settings.excerpt_length,
      * or globally via the "discord_excerpt_length" application setting.
      */
     const DEFAULT_EXCERPT_LENGTH = 280;
@@ -706,9 +705,9 @@ class EmbedBuilder extends Base
         $value = '';
 
         if (! empty($project['id'])) {
-            $metadata = $this->projectMetadataModel->getAll($project['id']);
-            if (array_key_exists(self::KEY_EXCERPT_LENGTH, $metadata)) {
-                $value = (string) $metadata[self::KEY_EXCERPT_LENGTH];
+            $projectValue = $this->discordSettingsModel->getProjectExcerptLength($project['id']);
+            if ($projectValue !== null) {
+                $value = (string) $projectValue;
             }
         }
 

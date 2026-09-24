@@ -96,15 +96,17 @@ AND project does not suppress Email for this event
 AND task does not mute Email for this event
 ```
 
-設定會存放在 Kanboard config 與 metadata tables，不需要資料庫 schema migration：
+設定會使用 Kanboard config 保存全域 fallback，並使用 Discord 外掛自有資料表保存 project/task/user 狀態。從舊版 metadata 儲存升級時，migration 會自動搬移舊 Discord metadata，完成後刪除那些舊 metadata rows：
 
-| 設定 | 儲存位置 | Key 格式 |
+| 設定 | 儲存位置 | Key / 欄位 |
 | --- | --- | --- |
 | 全域預設 webhook | `settings` | `discord_default_webhook_url` |
-| 專案 Discord event | `project_has_metadata` | `discord_event_<event>` |
-| 專案 Email suppression | `project_has_metadata` | `discord_suppress_email_<event>` |
-| 任務 Discord mute | `task_has_metadata` | `discord_task_mute_discord_<event>` |
-| 任務 Email mute | `task_has_metadata` | `discord_task_mute_email_<event>` |
+| 專案 webhook / excerpt | `discord_project_settings` | `project_id`, `webhook_url`, `excerpt_length` |
+| 專案事件規則 | `discord_project_event_rules` | `project_id`, `event_key`, `discord_enabled`, `email_suppressed` |
+| 任務靜音規則 | `discord_task_event_rules` | `task_id`, `event_key`, `mute_discord`, `mute_email` |
+| 使用者 Discord ID / processed marker | `discord_user_settings` | `user_id`, `discord_user_id`, `default_notifications_processed` |
+
+Migration 支援 SQLite、MySQL/MariaDB、PostgreSQL 與 Microsoft SQL Server。升級前請備份 Kanboard database。若 migration 失敗，Kanboard 不會推進此外掛的 schema version；回報時請保留錯誤 log。
 
 支援的事件列：
 
@@ -186,7 +188,7 @@ cd <host-plugins-dir>/Discord
 git pull
 ```
 
-不需要重啟 container；Kanboard 每次 request 都會載入 plugins，且此外掛沒有 database schema migrations。Plugin loader 會忽略 clone 中的 `.git` 與 `Test/` 目錄。
+不需要重啟 container；Kanboard 每次 request 都會載入 plugins。此外掛包含 database schema migrations，Kanboard 會在升級時自動執行；production 更新前請先備份 database。Plugin loader 會忽略 clone 中的 `.git` 與 `Test/` 目錄。
 
 疑難排解
 --------

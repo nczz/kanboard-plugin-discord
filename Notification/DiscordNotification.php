@@ -37,11 +37,6 @@ use Kanboard\Plugin\Discord\Builder\EmbedBuilder;
 class DiscordNotification extends Base implements NotificationInterface
 {
     /**
-     * Project metadata key holding the Discord Incoming Webhook URL.
-     */
-    const META_WEBHOOK_URL = 'discord_webhook_url';
-
-    /**
      * Application setting key holding the global fallback Discord Incoming Webhook URL.
      */
     const CONFIG_WEBHOOK_URL = 'discord_default_webhook_url';
@@ -52,19 +47,14 @@ class DiscordNotification extends Base implements NotificationInterface
     const TYPE = 'discord';
 
     /**
-     * User metadata key holding the numeric Discord User ID (for @mentions).
+     * Legacy project metadata key migrated into discord_project_settings.
+     */
+    const META_WEBHOOK_URL = 'discord_webhook_url';
+
+    /**
+     * Legacy user metadata key migrated into discord_user_settings.
      */
     const META_USER_ID = 'discord_user_id';
-
-    /**
-     * Project metadata prefix for per-event Discord delivery toggles.
-     */
-    const META_EVENT_PREFIX = EventRegistry::META_DISCORD_EVENT_PREFIX;
-
-    /**
-     * Project metadata prefix for per-event Email suppression toggles.
-     */
-    const META_SUPPRESS_EMAIL_PREFIX = EventRegistry::META_SUPPRESS_EMAIL_PREFIX;
 
     /**
      * Per-process overdue de-duplication. Kanboard core can notify several
@@ -87,31 +77,7 @@ class DiscordNotification extends Base implements NotificationInterface
     }
 
     /**
-     * Build project metadata key for an event-toggle option.
-     *
-     * @access public
-     * @param  string $key
-     * @return string
-     */
-    public static function getEventMetadataKey($key)
-    {
-        return EventRegistry::getDiscordProjectMetadataKey($key);
-    }
-
-    /**
-     * Build project metadata key for an Email suppression option.
-     *
-     * @access public
-     * @param  string $key
-     * @return string
-     */
-    public static function getSuppressEmailMetadataKey($key)
-    {
-        return EventRegistry::getSuppressEmailProjectMetadataKey($key);
-    }
-
-    /**
-     * Whether an event-toggle option is enabled when no metadata has been saved.
+     * Whether an event-toggle option is enabled when no rule has been saved.
      *
      * @access public
      * @param  string $key
@@ -123,30 +89,29 @@ class DiscordNotification extends Base implements NotificationInterface
     }
 
     /**
-     * Resolve a Discord toggle value from project metadata.
+     * Build a legacy project metadata key. Runtime storage no longer uses this.
      *
      * @access public
      * @param  string $key
-     * @param  array  $metadata
-     * @return boolean
+     * @return string
      */
-    public static function isEventMetadataEnabled($key, array $metadata)
+    public static function getEventMetadataKey($key)
     {
-        return EventRegistry::isDiscordProjectEventEnabled($key, $metadata);
+        return EventRegistry::getDiscordProjectMetadataKey($key);
     }
 
     /**
-     * Resolve an Email suppression value from project metadata.
+     * Build a legacy Email suppression metadata key. Runtime storage no longer uses this.
      *
      * @access public
      * @param  string $key
-     * @param  array  $metadata
-     * @return boolean
+     * @return string
      */
-    public static function isEmailSuppressedMetadataEnabled($key, array $metadata)
+    public static function getSuppressEmailMetadataKey($key)
     {
-        return EventRegistry::isProjectEmailSuppressed($key, $metadata);
+        return EventRegistry::getSuppressEmailProjectMetadataKey($key);
     }
+
 
     /**
      * Reached for Kanboard user-notification deliveries. This plugin sends
@@ -520,9 +485,9 @@ class DiscordNotification extends Base implements NotificationInterface
             return false;
         }
 
-        $metadata = $this->projectMetadataModel->getAll($projectId);
+        $rules = $this->discordSettingsModel->getProjectEventRules($projectId);
         foreach ($eventKeys as $eventKey) {
-            if (EventRegistry::isDiscordProjectEventEnabled($eventKey, $metadata)) {
+            if (EventRegistry::isDiscordProjectEventEnabled($eventKey, $rules)) {
                 return true;
             }
         }
@@ -561,16 +526,16 @@ class DiscordNotification extends Base implements NotificationInterface
             return false;
         }
 
-        $taskMetadata = $this->taskMetadataModel->getAll((int) $task['id']);
-        $projectMetadata = empty($task['project_id'])
+        $taskRules = $this->discordSettingsModel->getTaskEventRules((int) $task['id']);
+        $projectRules = empty($task['project_id'])
             ? array()
-            : $this->projectMetadataModel->getAll((int) $task['project_id']);
+            : $this->discordSettingsModel->getProjectEventRules((int) $task['project_id']);
 
         foreach ($eventKeys as $eventKey) {
             $projectEnabled = empty($task['project_id'])
-                || EventRegistry::isDiscordProjectEventEnabled($eventKey, $projectMetadata);
+                || EventRegistry::isDiscordProjectEventEnabled($eventKey, $projectRules);
 
-            if ($projectEnabled && ! EventRegistry::isTaskDiscordMuted($eventKey, $taskMetadata)) {
+            if ($projectEnabled && ! EventRegistry::isTaskDiscordMuted($eventKey, $taskRules)) {
                 return false;
             }
         }
@@ -587,7 +552,7 @@ class DiscordNotification extends Base implements NotificationInterface
      */
     protected function getWebhookUrl($projectId)
     {
-        $url = trim($this->projectMetadataModel->get($projectId, self::META_WEBHOOK_URL, ''));
+        $url = trim($this->discordSettingsModel->getProjectWebhookUrl($projectId));
         $source = 'project '.$projectId;
 
         if ($url === '') {
@@ -618,11 +583,11 @@ class DiscordNotification extends Base implements NotificationInterface
     /**
      * Validate that a URL is a Discord (or compatible) webhook endpoint over HTTPS.
      *
-     * @access protected
+     * @access public
      * @param  string $url
      * @return boolean
      */
-    protected function isDiscordWebhookUrl($url)
+    public function isDiscordWebhookUrl($url)
     {
         $parts = parse_url($url);
 
@@ -672,10 +637,7 @@ class DiscordNotification extends Base implements NotificationInterface
             return '';
         }
 
-        $discordId = trim($this->userMetadataModel->get($userId, self::META_USER_ID, ''));
-
-        // Discord user IDs (snowflakes) are numeric strings.
-        return ctype_digit($discordId) ? $discordId : '';
+        return $this->discordSettingsModel->getDiscordUserId($userId);
     }
 
     /**

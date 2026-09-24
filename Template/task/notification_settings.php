@@ -19,24 +19,22 @@
             </tr>
             <?php foreach ($discordEventOptions as $discordEventKey => $discordEventLabel): ?>
                 <?php
-                    $discordMuteMetadataKey = \Kanboard\Plugin\Discord\Notification\EventRegistry::getTaskMuteDiscordMetadataKey($discordEventKey);
-                    $emailMuteMetadataKey = \Kanboard\Plugin\Discord\Notification\EventRegistry::getTaskMuteEmailMetadataKey($discordEventKey);
-                    $discordMuted = \Kanboard\Plugin\Discord\Notification\EventRegistry::isTaskDiscordMuted($discordEventKey, $values);
-                    $emailMuted = \Kanboard\Plugin\Discord\Notification\EventRegistry::isTaskEmailMuted($discordEventKey, $values);
+                    $discordMuted = \Kanboard\Plugin\Discord\Notification\EventRegistry::isTaskDiscordMuted($discordEventKey, $rules);
+                    $emailMuted = \Kanboard\Plugin\Discord\Notification\EventRegistry::isTaskEmailMuted($discordEventKey, $rules);
                 ?>
                 <tr>
                     <td><?= $this->text->e($discordEventLabel) ?></td>
                     <td>
                         <?php if (\Kanboard\Plugin\Discord\Notification\EventRegistry::supportsDiscordProjectEvent($discordEventKey)): ?>
-                            <input type="hidden" name="<?= $discordMuteMetadataKey ?>" value="0">
-                            <?= $this->form->checkbox($discordMuteMetadataKey, '', '1', $discordMuted) ?>
+                            <input type="hidden" name="rules[<?= $this->text->e($discordEventKey) ?>][mute_discord]" value="0">
+                            <?= $this->form->checkbox('rules['.$discordEventKey.'][mute_discord]', '', '1', $discordMuted) ?>
                         <?php else: ?>
                             <?= t('Handled by comment cards') ?>
                         <?php endif ?>
                     </td>
                     <td>
-                        <input type="hidden" name="<?= $emailMuteMetadataKey ?>" value="0">
-                        <?= $this->form->checkbox($emailMuteMetadataKey, '', '1', $emailMuted) ?>
+                        <input type="hidden" name="rules[<?= $this->text->e($discordEventKey) ?>][mute_email]" value="0">
+                        <?= $this->form->checkbox('rules['.$discordEventKey.'][mute_email]', '', '1', $emailMuted) ?>
                     </td>
                 </tr>
             <?php endforeach ?>

@@ -3,6 +3,7 @@
 namespace Kanboard\Plugin\Discord;
 
 use Kanboard\Core\Plugin\Base;
+use Kanboard\Core\Security\Role;
 use Kanboard\Core\Translator;
 use Kanboard\Plugin\Discord\Console\TaskOverdueNotificationCommand;
 use Kanboard\Plugin\Discord\Notification\DiscordNotification;
@@ -26,14 +27,12 @@ class Plugin extends Base
 
     /**
      * Config flag recording the metadata backfill for users processed before
-     * per-user default notification markers existed.
+     * per-user default notification markers moved to plugin-owned tables.
      */
     const CONFIG_DEFAULT_USER_NOTIFICATIONS_MARKED = 'discord_default_user_notifications_marked';
 
     /**
-     * User metadata flag showing this user already received the default
-     * Discord notification decision. It preserves later opt-outs while allowing
-     * new users to be enabled on the next plugin initialization.
+     * Legacy user metadata flag migrated into discord_user_settings.
      */
     const USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED = 'discord.default_user_notifications.processed';
 
@@ -97,20 +96,23 @@ class Plugin extends Base
         // config table automatically.
         $this->template->hook->attach('template:config:integrations', 'discord:config/integration');
 
-        // Attach the project-level settings form (project webhook URL + per-event
-        // toggles) to the official third-party integrations hook. Kanboard stores
-        // the submitted fields into project_has_metadata automatically.
+        // Attach links to plugin-owned project/user settings pages. Those pages
+        // save Discord fields through plugin controllers instead of Kanboard's
+        // metadata-backed core integration forms.
         $this->template->hook->attach('template:project:integrations', 'discord:project/integration');
-
-        // Attach the user-level settings form (Discord User ID for mentions) to
-        // the official user integrations hook. Kanboard stores the submitted
-        // fields into user_has_metadata automatically.
         $this->template->hook->attach('template:user:integrations', 'discord:user/integration');
 
-        // Add a task-level notification rule editor without changing Kanboard's
-        // task schema. Rules are persisted in task_has_metadata.
+        // Add a task-level notification rule editor backed by plugin-owned
+        // discord_task_event_rules rows.
         $this->template->hook->attach('template:task:sidebar:after-basic-actions', 'discord:task/notification_rules_link');
         $this->template->hook->attach('template:task:dropdown:after-basic-actions', 'discord:task/notification_rules_link');
+
+        $this->projectAccessMap->add('ProjectIntegrationController', array('show', 'save'), Role::PROJECT_MANAGER);
+        $this->projectAccessMap->add('TaskNotificationSettingsController', array('show', 'save'), Role::PROJECT_MEMBER);
+        $this->applicationAccessMap->add('UserIntegrationController', array('show', 'save'), Role::APP_USER);
+
+        $this->hook->on('model:task:duplication:aftersave', array($this, 'copyTaskEventRules'));
+        $this->hook->on('model:task:project_duplication:aftersave', array($this, 'copyTaskEventRules'));
 
         // Note: no CSP changes required. Discord webhooks are invoked server-side
         // via the Kanboard HTTP client, and the default img-src policy ('*') already
@@ -118,12 +120,10 @@ class Plugin extends Base
     }
 
     /**
-     * Enable the Discord user-notification type by default for active users.
-     *
      * Existing active users are enabled once when the plugin is installed. Each
-     * processed user is then marked in user metadata so later requests can enable
-     * only newly created or newly activated users without overriding an existing
-     * user's deliberate opt-out.
+     * processed user is then marked in plugin-owned user settings so later
+     * requests can enable only newly created or newly activated users without
+     * overriding an existing user's deliberate opt-out.
      *
      * @access protected
      */
@@ -180,10 +180,7 @@ class Plugin extends Base
      */
     protected function isDefaultUserNotificationProcessed($userId)
     {
-        return $this->db->table('user_has_metadata')
-            ->eq('user_id', $userId)
-            ->eq('name', self::USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED)
-            ->exists();
+        return $this->discordSettingsModel->isDefaultNotificationsProcessed($userId);
     }
 
     /**
@@ -197,11 +194,8 @@ class Plugin extends Base
         if ($this->isDefaultUserNotificationProcessed($userId)) {
             return;
         }
-        $this->db->table('user_has_metadata')->insert(array(
-            'user_id' => $userId,
-            'name' => self::USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED,
-            'value' => '1',
-        ));
+
+        $this->discordSettingsModel->markDefaultNotificationsProcessed($userId);
     }
 
     /**
@@ -223,6 +217,20 @@ class Plugin extends Base
                 'notification_type' => DiscordNotification::TYPE,
             ));
         }
+    }
+
+    /**
+     * Copy plugin-owned task notification rules after Kanboard duplicates a task.
+     *
+     * @param array $values
+     */
+    public function copyTaskEventRules(array &$values)
+    {
+        if (empty($values['source_task_id']) || empty($values['destination_task_id'])) {
+            return;
+        }
+
+        $this->discordSettingsModel->duplicateTaskRules($values['source_task_id'], $values['destination_task_id']);
     }
 
     /**
@@ -251,6 +259,8 @@ class Plugin extends Base
             ),
             'Plugin\Discord\Model' => array(
                 'SubtaskModel',
+                'DiscordSettingsModel',
+                'ProjectDuplicationModel',
             ),
         );
     }
@@ -284,7 +294,7 @@ class Plugin extends Base
      */
     public function getPluginVersion()
     {
-        return '1.0.0';
+        return '1.1.0';
     }
 
     /**

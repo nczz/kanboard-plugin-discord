@@ -19,10 +19,16 @@ use Kanboard\Plugin\Discord\Plugin;
  */
 class DiscordNotificationTest extends Base
 {
+    private $discordClassesBuilt = false;
+
     private function loadPlugin()
     {
         $plugin = new Plugin($this->container);
-        \Kanboard\Core\Tool::buildDIC($this->container, $plugin->getClasses());
+        if (! $this->discordClassesBuilt) {
+            \Kanboard\Core\Tool::buildDIC($this->container, $plugin->getClasses());
+            $this->discordClassesBuilt = true;
+        }
+        $this->installDiscordSchema();
         $plugin->initialize();
         return $plugin;
     }
@@ -108,6 +114,95 @@ class DiscordNotificationTest extends Base
         return $taskId;
     }
 
+    private function installDiscordSchema()
+    {
+        require_once __DIR__.'/../Schema/Sqlite.php';
+        \Kanboard\Plugin\Discord\Schema\version_1($this->container['db']->getConnection());
+    }
+
+    private function saveProjectMetadata($projectId, array $values)
+    {
+        $settings = $this->container['discordSettingsModel']->getProjectSettings($projectId);
+        $rules = $this->container['discordSettingsModel']->getProjectEventRules($projectId);
+
+        if (array_key_exists(DiscordNotification::META_WEBHOOK_URL, $values)) {
+            $settings['webhook_url'] = $values[DiscordNotification::META_WEBHOOK_URL];
+        }
+        if (array_key_exists(\Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH, $values)) {
+            $settings['excerpt_length'] = $values[\Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH];
+        }
+
+        foreach (EventRegistry::getEventKeys() as $eventKey) {
+            $discordValue = $this->getLegacyProjectValue($values, EventRegistry::META_DISCORD_EVENT_PREFIX, $eventKey);
+            $emailValue = $this->getLegacyProjectValue($values, EventRegistry::META_SUPPRESS_EMAIL_PREFIX, $eventKey);
+            if ($discordValue !== null || $emailValue !== null) {
+                if (! isset($rules[$eventKey])) {
+                    $rules[$eventKey] = array('discord_enabled' => null, 'email_suppressed' => null);
+                }
+                if ($discordValue !== null) {
+                    $rules[$eventKey]['discord_enabled'] = $discordValue;
+                }
+                if ($emailValue !== null) {
+                    $rules[$eventKey]['email_suppressed'] = $emailValue;
+                }
+            }
+        }
+
+        $this->container['discordSettingsModel']->saveProjectSettings($projectId, $settings);
+        if (! empty($rules)) {
+            $this->container['discordSettingsModel']->saveProjectEventRules($projectId, $rules);
+        }
+    }
+
+    private function saveTaskMetadata($taskId, array $values)
+    {
+        $rules = $this->container['discordSettingsModel']->getTaskEventRules($taskId);
+        foreach (EventRegistry::getEventKeys() as $eventKey) {
+            $muteDiscord = $this->getLegacyProjectValue($values, EventRegistry::META_TASK_MUTE_DISCORD_PREFIX, $eventKey);
+            $muteEmail = $this->getLegacyProjectValue($values, EventRegistry::META_TASK_MUTE_EMAIL_PREFIX, $eventKey);
+            if ($muteDiscord !== null || $muteEmail !== null) {
+                if (! isset($rules[$eventKey])) {
+                    $rules[$eventKey] = array('mute_discord' => 0, 'mute_email' => 0);
+                }
+                if ($muteDiscord !== null) {
+                    $rules[$eventKey]['mute_discord'] = $muteDiscord;
+                }
+                if ($muteEmail !== null) {
+                    $rules[$eventKey]['mute_email'] = $muteEmail;
+                }
+            }
+        }
+
+        $this->container['discordSettingsModel']->saveTaskEventRules($taskId, $rules);
+    }
+
+    private function saveUserMetadata($userId, array $values)
+    {
+        if (array_key_exists(DiscordNotification::META_USER_ID, $values)) {
+            $this->container['discordSettingsModel']->saveDiscordUserId($userId, $values[DiscordNotification::META_USER_ID]);
+        }
+        if (array_key_exists(Plugin::USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED, $values) && (string) $values[Plugin::USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED] === '1') {
+            $this->container['discordSettingsModel']->markDefaultNotificationsProcessed($userId);
+        }
+    }
+
+    private function getLegacyProjectValue(array $values, $prefix, $eventKey)
+    {
+        $metadataKey = $prefix.$eventKey;
+        if (array_key_exists($metadataKey, $values)) {
+            return (string) $values[$metadataKey] === '1' ? 1 : 0;
+        }
+
+        foreach (EventRegistry::getLegacyEventKeys($eventKey) as $legacyEventKey) {
+            $legacyMetadataKey = $prefix.$legacyEventKey;
+            if (array_key_exists($legacyMetadataKey, $values)) {
+                return (string) $values[$legacyMetadataKey] === '1' ? 1 : 0;
+            }
+        }
+
+        return null;
+    }
+
     public function testPluginRegistersDiscordType()
     {
         $this->loadPlugin();
@@ -153,7 +248,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'email-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             EventRegistry::getSuppressEmailProjectMetadataKey('task_update') => '1',
         ));
 
@@ -175,7 +270,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'email-only'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('task_update') => '0',
         ));
@@ -198,7 +293,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'discord-only'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('task_update') => '1',
             EventRegistry::getSuppressEmailProjectMetadataKey('task_update') => '1',
@@ -222,7 +317,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'mute-both'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('task_update') => '0',
             EventRegistry::getSuppressEmailProjectMetadataKey('task_update') => '1',
@@ -244,7 +339,7 @@ class DiscordNotificationTest extends Base
         $projectModel = new ProjectModel($this->container);
         $mutedProjectId = $projectModel->create(array('name' => 'muted-overdue-email'));
         $allowedProjectId = $projectModel->create(array('name' => 'allowed-overdue-email'));
-        $this->container['projectMetadataModel']->save($mutedProjectId, array(
+        $this->saveProjectMetadata($mutedProjectId, array(
             EventRegistry::getSuppressEmailProjectMetadataKey('task_overdue') => '1',
         ));
 
@@ -277,7 +372,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'comment-mention-email-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             EventRegistry::getSuppressEmailProjectMetadataKey('comment_mention') => '1',
         ));
 
@@ -300,7 +395,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'task-mention-email-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             EventRegistry::getSuppressEmailProjectMetadataKey('task_mention') => '1',
         ));
 
@@ -394,12 +489,8 @@ class DiscordNotificationTest extends Base
             DiscordNotification::TYPE,
             $this->container['userNotificationTypeModel']->getSelectedTypes($userId)
         );
-        $this->assertSame(
-            '1',
-            $this->container['userMetadataModel']->get(
-                $userId,
-                Plugin::USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED
-            )
+        $this->assertTrue(
+            $this->container['discordSettingsModel']->isDefaultNotificationsProcessed($userId)
         );
     }
 
@@ -473,7 +564,7 @@ class DiscordNotificationTest extends Base
         $this->container['configModel']->save(array(
             DiscordNotification::CONFIG_WEBHOOK_URL => 'https://discord.com/api/webhooks/100/global-token',
         ));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/200/project-token',
         ));
 
@@ -505,7 +596,7 @@ class DiscordNotificationTest extends Base
         $this->container['configModel']->save(array(
             DiscordNotification::CONFIG_WEBHOOK_URL => 'https://discord.com/api/webhooks/100/global-token',
         ));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://example.com/not-discord',
         ));
 
@@ -548,7 +639,7 @@ class DiscordNotificationTest extends Base
         $this->container['configModel']->save(array(
             DiscordNotification::CONFIG_WEBHOOK_URL => 'https://discord.com/api/webhooks/100/global-token',
         ));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::getEventMetadataKey('task_create') => '0',
         ));
 
@@ -570,12 +661,12 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'task-mute-discord'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('task_update') => '1',
         ));
         $taskId = $this->createTask($projectId, 'Task mute Discord');
-        $this->container['taskMetadataModel']->save($taskId, array(
+        $this->saveTaskMetadata($taskId, array(
             EventRegistry::getTaskMuteDiscordMetadataKey('task_update') => '1',
         ));
         $eventData = $this->taskUpdateEvent($projectId, $taskId);
@@ -597,12 +688,12 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'task-mute-email'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('task_update') => '1',
         ));
         $taskId = $this->createTask($projectId, 'Task mute Email');
-        $this->container['taskMetadataModel']->save($taskId, array(
+        $this->saveTaskMetadata($taskId, array(
             EventRegistry::getTaskMuteEmailMetadataKey('task_update') => '1',
         ));
         $eventData = $this->taskUpdateEvent($projectId, $taskId);
@@ -624,12 +715,12 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'task-mute-both'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('task_update') => '1',
         ));
         $taskId = $this->createTask($projectId, 'Task mute both');
-        $this->container['taskMetadataModel']->save($taskId, array(
+        $this->saveTaskMetadata($taskId, array(
             EventRegistry::getTaskMuteDiscordMetadataKey('task_update') => '1',
             EventRegistry::getTaskMuteEmailMetadataKey('task_update') => '1',
         ));
@@ -650,7 +741,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'project-disabled-stays-disabled'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('task_update') => '0',
         ));
@@ -671,12 +762,12 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'overdue-task-mute'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
         $mutedTaskId = $this->createTask($projectId, 'Muted overdue', array('date_due' => time() - 7200));
         $allowedTaskId = $this->createTask($projectId, 'Allowed overdue', array('date_due' => time() - 3600));
-        $this->container['taskMetadataModel']->save($mutedTaskId, array(
+        $this->saveTaskMetadata($mutedTaskId, array(
             EventRegistry::getTaskMuteDiscordMetadataKey('task_overdue') => '1',
             EventRegistry::getTaskMuteEmailMetadataKey('task_overdue') => '1',
         ));
@@ -723,7 +814,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'filtered'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             DiscordNotification::getEventMetadataKey('task_create') => '0',
         ));
@@ -743,7 +834,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'allowed'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             DiscordNotification::getEventMetadataKey('task_create') => '1',
         ));
@@ -773,7 +864,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'move-default-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -802,7 +893,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'subtask-default-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
         $eventData = $this->subtaskUpdateEvent($projectId, array('title' => 'Old title'));
@@ -824,7 +915,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'subtask-done-default-on'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
         $eventData = $this->subtaskUpdateEvent($projectId, array('status' => \Kanboard\Model\SubtaskModel::STATUS_TODO));
@@ -848,7 +939,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'subtask-opt-in'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('subtask_update_title') => '1',
             EventRegistry::getSuppressEmailProjectMetadataKey('subtask_update_title') => '0',
@@ -870,7 +961,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'move-enabled'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             DiscordNotification::getEventMetadataKey('task_move_column') => '1',
         ));
@@ -907,7 +998,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'legacy-move-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             DiscordNotification::getEventMetadataKey('task_update') => '1',
         ));
@@ -935,7 +1026,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'legacy-close-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             DiscordNotification::getEventMetadataKey('task_close_open') => '0',
         ));
@@ -956,7 +1047,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'overdue-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             DiscordNotification::getEventMetadataKey('task_overdue') => '0',
         ));
@@ -979,7 +1070,7 @@ class DiscordNotificationTest extends Base
         $projectModel = new ProjectModel($this->container);
         $userModel = new UserModel($this->container);
         $projectId = $projectModel->create(array('name' => 'overdue-dedupe'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -1021,10 +1112,10 @@ class DiscordNotificationTest extends Base
         $projectModel = new ProjectModel($this->container);
         $firstProjectId = $projectModel->create(array('name' => 'overdue-one'));
         $secondProjectId = $projectModel->create(array('name' => 'overdue-two'));
-        $this->container['projectMetadataModel']->save($firstProjectId, array(
+        $this->saveProjectMetadata($firstProjectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
-        $this->container['projectMetadataModel']->save($secondProjectId, array(
+        $this->saveProjectMetadata($secondProjectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/2/x',
         ));
 
@@ -1057,7 +1148,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'overdue-user-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             DiscordNotification::getEventMetadataKey('task_overdue') => '0',
         ));
@@ -1090,7 +1181,7 @@ class DiscordNotificationTest extends Base
             'date_due' => time() - 3600,
         ));
         $this->assertNotFalse($taskId);
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -1121,12 +1212,12 @@ class DiscordNotificationTest extends Base
         $userModel = new UserModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'My Project'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/123/abc',
         ));
 
         $userId = $userModel->create(array('username' => 'alice', 'name' => 'Alice'));
-        $this->container['userMetadataModel']->save($userId, array(
+        $this->saveUserMetadata($userId, array(
             DiscordNotification::META_USER_ID => '987654321012345678',
         ));
 
@@ -1192,7 +1283,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'EX'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -1223,7 +1314,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'EXEMPTY'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '',
         ));
@@ -1256,7 +1347,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'EX2'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '10',
         ));
@@ -1286,7 +1377,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'EX0'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '0',
         ));
@@ -1320,7 +1411,7 @@ class DiscordNotificationTest extends Base
         $userModel = new UserModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'P2'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
         $userId = $userModel->create(array('username' => 'bob', 'name' => 'Bob'));
@@ -1351,7 +1442,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'evil'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://evil.example.com/api/webhooks/1/x',
         ));
 
@@ -1372,11 +1463,11 @@ class DiscordNotificationTest extends Base
         $userModel = new UserModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'MP'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/9/z',
         ));
         $userId = $userModel->create(array('username' => 'carol', 'name' => 'Carol'));
-        $this->container['userMetadataModel']->save($userId, array(
+        $this->saveUserMetadata($userId, array(
             DiscordNotification::META_USER_ID => '111222333444555666',
         ));
 
@@ -1412,11 +1503,11 @@ class DiscordNotificationTest extends Base
         $userModel = new UserModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'CMDUP'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/9/z',
         ));
         $userId = $userModel->create(array('username' => 'dupe', 'name' => 'Dupe'));
-        $this->container['userMetadataModel']->save($userId, array(
+        $this->saveUserMetadata($userId, array(
             DiscordNotification::META_USER_ID => '111222333444555669',
         ));
         $this->container['userNotificationTypeModel']->saveSelectedTypes($userId, array(DiscordNotification::TYPE));
@@ -1441,7 +1532,7 @@ class DiscordNotificationTest extends Base
         $userModel = new UserModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'MNOID'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/9/z',
         ));
         $userId = $userModel->create(array('username' => 'nodc', 'name' => 'No Discord'));
@@ -1466,12 +1557,12 @@ class DiscordNotificationTest extends Base
         $userModel = new UserModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'MOFF'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/9/z',
             DiscordNotification::getEventMetadataKey('mention') => '0',
         ));
         $userId = $userModel->create(array('username' => 'moff', 'name' => 'Mention Off'));
-        $this->container['userMetadataModel']->save($userId, array(
+        $this->saveUserMetadata($userId, array(
             DiscordNotification::META_USER_ID => '111222333444555668',
         ));
         $this->container['userNotificationTypeModel']->saveSelectedTypes($userId, array(DiscordNotification::TYPE));
@@ -1493,11 +1584,11 @@ class DiscordNotificationTest extends Base
         $userModel = new UserModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'NM'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/9/z',
         ));
         $userId = $userModel->create(array('username' => 'nina', 'name' => 'Nina'));
-        $this->container['userMetadataModel']->save($userId, array(
+        $this->saveUserMetadata($userId, array(
             DiscordNotification::META_USER_ID => '111222333444555667',
         ));
         $this->container['userNotificationTypeModel']->saveSelectedTypes($userId, array(DiscordNotification::TYPE));
@@ -1516,7 +1607,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'OD'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -1551,12 +1642,12 @@ class DiscordNotificationTest extends Base
         $projectModel = new ProjectModel($this->container);
         $userModel = new UserModel($this->container);
         $projectId = $projectModel->create(array('name' => 'INJ'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
         $userId = $userModel->create(array('username' => 'dan', 'name' => 'Dan'));
         // Malicious / malformed values must be rejected by ctype_digit.
-        $this->container['userMetadataModel']->save($userId, array(
+        $this->saveUserMetadata($userId, array(
             DiscordNotification::META_USER_ID => '@everyone <@&12345>',
         ));
 
@@ -1584,7 +1675,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'MD'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -1619,7 +1710,7 @@ class DiscordNotificationTest extends Base
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'P'));
         // Valid host but not a webhook path.
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/login',
         ));
 
@@ -1640,7 +1731,7 @@ class DiscordNotificationTest extends Base
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'PAPI'));
         // Valid host and API prefix, but not a webhook execution path.
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/v10/users/@me',
         ));
 
@@ -1660,7 +1751,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'PINC'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/123',
         ));
 
@@ -1680,7 +1771,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'PSUB'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/123/token/messages/456',
         ));
 
@@ -1699,7 +1790,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'PV'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/v10/webhooks/1/x',
         ));
 
@@ -1727,7 +1818,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'LT'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -1756,7 +1847,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'ST'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('subtask_update_time_tracking') => '1',
         ));
@@ -1806,7 +1897,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'subtask-status-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('subtask_update_status_inprogress') => '0',
         ));
@@ -1827,7 +1918,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'subtask-status-legacy-off'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('subtask_update_status') => '0',
         ));
@@ -1848,7 +1939,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'subtask-mixed'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             EventRegistry::getDiscordProjectMetadataKey('subtask_update_status_inprogress') => '0',
             EventRegistry::getDiscordProjectMetadataKey('subtask_update_title') => '1',
@@ -1870,7 +1961,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'subtask-email-mixed'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             EventRegistry::getSuppressEmailProjectMetadataKey('subtask_update_status_inprogress') => '1',
             EventRegistry::getSuppressEmailProjectMetadataKey('subtask_update_title') => '0',
         ));
@@ -1925,7 +2016,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'ST0'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '0',
         ));
@@ -1958,7 +2049,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'AT'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -1989,7 +2080,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'UP'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -2055,7 +2146,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'DESC'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -2125,7 +2216,7 @@ class DiscordNotificationTest extends Base
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'BIG'));
         // Huge excerpt cap to try to overflow the description field.
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '4096',
         ));
@@ -2165,7 +2256,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'ENT'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
             DiscordNotification::getEventMetadataKey('task_move_column') => '1',
         ));
@@ -2202,7 +2293,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'MD2'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -2231,7 +2322,7 @@ class DiscordNotificationTest extends Base
 
         $projectModel = new ProjectModel($this->container);
         $projectId = $projectModel->create(array('name' => 'MISS'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
@@ -2271,20 +2362,20 @@ class DiscordNotificationTest extends Base
         $projectUserRoleModel = new ProjectUserRoleModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'CM'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
         // Assignee (owner) has a Discord ID.
         $assigneeId = $userModel->create(array('username' => 'boss', 'name' => 'Boss'));
-        $this->container['userMetadataModel']->save($assigneeId, array(
+        $this->saveUserMetadata($assigneeId, array(
             DiscordNotification::META_USER_ID => '100000000000000001',
         ));
 
         // Mentioned member of the project.
         $memberId = $userModel->create(array('username' => 'zoe', 'name' => 'Zoe', 'notifications_enabled' => 1));
         $projectUserRoleModel->addUser($projectId, $memberId, Role::PROJECT_MEMBER);
-        $this->container['userMetadataModel']->save($memberId, array(
+        $this->saveUserMetadata($memberId, array(
             DiscordNotification::META_USER_ID => '700000000000000007',
         ));
         $this->container['userNotificationTypeModel']->saveSelectedTypes($memberId, array(DiscordNotification::TYPE));
@@ -2332,12 +2423,12 @@ class DiscordNotificationTest extends Base
         $projectUserRoleModel = new ProjectUserRoleModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'CND'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
         $assigneeId = $userModel->create(array('username' => 'anchor', 'name' => 'Anchor'));
-        $this->container['userMetadataModel']->save($assigneeId, array(
+        $this->saveUserMetadata($assigneeId, array(
             DiscordNotification::META_USER_ID => '800000000000000008',
         ));
         $memberId = $userModel->create(array('username' => 'nomap', 'name' => 'No Map', 'notifications_enabled' => 1));
@@ -2382,17 +2473,17 @@ class DiscordNotificationTest extends Base
         $projectUserRoleModel = new ProjectUserRoleModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'CNT'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
         $assigneeId = $userModel->create(array('username' => 'reserve', 'name' => 'Reserve'));
-        $this->container['userMetadataModel']->save($assigneeId, array(
+        $this->saveUserMetadata($assigneeId, array(
             DiscordNotification::META_USER_ID => '900000000000000009',
         ));
         $memberId = $userModel->create(array('username' => 'unselected', 'name' => 'Unselected', 'notifications_enabled' => 1));
         $projectUserRoleModel->addUser($projectId, $memberId, Role::PROJECT_MEMBER);
-        $this->container['userMetadataModel']->save($memberId, array(
+        $this->saveUserMetadata($memberId, array(
             DiscordNotification::META_USER_ID => '900000000000000010',
         ));
 
@@ -2433,12 +2524,12 @@ class DiscordNotificationTest extends Base
         $userModel = new UserModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'CN'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
         $assigneeId = $userModel->create(array('username' => 'chief', 'name' => 'Chief'));
-        $this->container['userMetadataModel']->save($assigneeId, array(
+        $this->saveUserMetadata($assigneeId, array(
             DiscordNotification::META_USER_ID => '200000000000000002',
         ));
 
@@ -2479,12 +2570,12 @@ class DiscordNotificationTest extends Base
         $userModel = new UserModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'CNM'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
         $assigneeId = $userModel->create(array('username' => 'lead', 'name' => 'Lead'));
-        $this->container['userMetadataModel']->save($assigneeId, array(
+        $this->saveUserMetadata($assigneeId, array(
             DiscordNotification::META_USER_ID => '300000000000000003',
         ));
 
@@ -2527,12 +2618,12 @@ class DiscordNotificationTest extends Base
         $projectUserRoleModel = new ProjectUserRoleModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'CD'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
         $assigneeId = $userModel->create(array('username' => 'fallback', 'name' => 'Fallback'));
-        $this->container['userMetadataModel']->save($assigneeId, array(
+        $this->saveUserMetadata($assigneeId, array(
             DiscordNotification::META_USER_ID => '600000000000000006',
         ));
         $memberId = $userModel->create(array(
@@ -2541,7 +2632,7 @@ class DiscordNotificationTest extends Base
             'notifications_enabled' => 0,
         ));
         $projectUserRoleModel->addUser($projectId, $memberId, Role::PROJECT_MEMBER);
-        $this->container['userMetadataModel']->save($memberId, array(
+        $this->saveUserMetadata($memberId, array(
             DiscordNotification::META_USER_ID => '600000000000000007',
         ));
         $this->container['userNotificationTypeModel']->saveSelectedTypes($memberId, array(DiscordNotification::TYPE));
@@ -2585,12 +2676,12 @@ class DiscordNotificationTest extends Base
         $projectUserRoleModel = new ProjectUserRoleModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'CU'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
         $assigneeId = $userModel->create(array('username' => 'mgr', 'name' => 'Mgr'));
-        $this->container['userMetadataModel']->save($assigneeId, array(
+        $this->saveUserMetadata($assigneeId, array(
             DiscordNotification::META_USER_ID => '400000000000000004',
         ));
         $memberId = $userModel->create(array('username' => 'yan', 'name' => 'Yan'));
@@ -2634,12 +2725,12 @@ class DiscordNotificationTest extends Base
         $projectUserRoleModel = new ProjectUserRoleModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'CS'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
         $assigneeId = $userModel->create(array('username' => 'own', 'name' => 'Own'));
-        $this->container['userMetadataModel']->save($assigneeId, array(
+        $this->saveUserMetadata($assigneeId, array(
             DiscordNotification::META_USER_ID => '500000000000000005',
         ));
         // The author is also a project member and mentions themselves.
@@ -2680,13 +2771,13 @@ class DiscordNotificationTest extends Base
         $projectUserRoleModel = new ProjectUserRoleModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'SAFE'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
 
         $memberId = $userModel->create(array('username' => 'safe', 'name' => 'Safe'));
         $projectUserRoleModel->addUser($projectId, $memberId, Role::PROJECT_MEMBER);
-        $this->container['userMetadataModel']->save($memberId, array(
+        $this->saveUserMetadata($memberId, array(
             DiscordNotification::META_USER_ID => '710000000000000001',
         ));
 
@@ -2723,11 +2814,11 @@ class DiscordNotificationTest extends Base
         $userModel = new UserModel($this->container);
 
         $projectId = $projectModel->create(array('name' => 'LONG'));
-        $this->container['projectMetadataModel']->save($projectId, array(
+        $this->saveProjectMetadata($projectId, array(
             DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
         ));
         $assigneeId = $userModel->create(array('username' => 'long-owner', 'name' => 'Long Owner'));
-        $this->container['userMetadataModel']->save($assigneeId, array(
+        $this->saveUserMetadata($assigneeId, array(
             DiscordNotification::META_USER_ID => '720000000000000002',
         ));
 
@@ -2776,5 +2867,141 @@ class DiscordNotificationTest extends Base
         $this->assertCount(100, $payload['allowed_mentions']['users']);
         $this->assertSame('730000000000000001', $payload['allowed_mentions']['users'][0]);
         $this->assertSame('730000000000000100', $payload['allowed_mentions']['users'][99]);
+    }
+
+
+    public function testProjectDuplicationModelIncludesDiscordSettingsSelection()
+    {
+        $this->loadPlugin();
+
+        $this->assertInstanceOf(
+            '\Kanboard\Plugin\Discord\Model\ProjectDuplicationModel',
+            $this->container['projectDuplicationModel']
+        );
+        $this->assertContains('discordSettingsModel', $this->container['projectDuplicationModel']->getPossibleSelection());
+        $this->assertContains('discordSettingsModel', $this->container['projectDuplicationModel']->getOptionalSelection());
+    }
+
+    public function testDiscordSettingsModelDuplicatesProjectSettings()
+    {
+        $this->loadPlugin();
+        $projectModel = new ProjectModel($this->container);
+        $srcProjectId = $projectModel->create(array('name' => 'copy-source'));
+        $dstProjectId = $projectModel->create(array('name' => 'copy-destination'));
+
+        $this->saveProjectMetadata($srcProjectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '12',
+            EventRegistry::getDiscordProjectMetadataKey('task_update') => '0',
+            EventRegistry::getSuppressEmailProjectMetadataKey('task_update') => '1',
+        ));
+
+        $this->assertTrue($this->container['discordSettingsModel']->duplicate($srcProjectId, $dstProjectId));
+        $this->assertSame('https://discord.com/api/webhooks/1/x', $this->container['discordSettingsModel']->getProjectWebhookUrl($dstProjectId));
+        $this->assertSame('12', $this->container['discordSettingsModel']->getProjectExcerptLength($dstProjectId));
+        $rules = $this->container['discordSettingsModel']->getProjectEventRules($dstProjectId);
+        $this->assertSame(0, $rules['task_update']['discord_enabled']);
+        $this->assertSame(1, $rules['task_update']['email_suppressed']);
+    }
+
+    public function testProjectDuplicationCopiesDiscordSettingsOnlyWithMetadataSelection()
+    {
+        $this->loadPlugin();
+        $projectModel = new ProjectModel($this->container);
+        $srcProjectId = $projectModel->create(array('name' => 'selection-copy-source'));
+
+        $this->saveProjectMetadata($srcProjectId, array(
+            DiscordNotification::META_WEBHOOK_URL => 'https://discord.com/api/webhooks/1/x',
+            \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH => '12',
+            EventRegistry::getDiscordProjectMetadataKey('task_update') => '0',
+            EventRegistry::getSuppressEmailProjectMetadataKey('task_update') => '1',
+        ));
+
+        $withoutMetadataProjectId = $this->container['projectDuplicationModel']->duplicate(
+            $srcProjectId,
+            array(),
+            0,
+            'selection-copy-without-metadata'
+        );
+        $this->assertNotFalse($withoutMetadataProjectId);
+        $this->assertSame('', $this->container['discordSettingsModel']->getProjectWebhookUrl($withoutMetadataProjectId));
+        $this->assertSame(array(), $this->container['discordSettingsModel']->getProjectEventRules($withoutMetadataProjectId));
+
+        $withMetadataProjectId = $this->container['projectDuplicationModel']->duplicate(
+            $srcProjectId,
+            array('projectMetadataModel'),
+            0,
+            'selection-copy-with-metadata'
+        );
+        $this->assertNotFalse($withMetadataProjectId);
+        $this->assertSame('https://discord.com/api/webhooks/1/x', $this->container['discordSettingsModel']->getProjectWebhookUrl($withMetadataProjectId));
+        $this->assertSame('12', $this->container['discordSettingsModel']->getProjectExcerptLength($withMetadataProjectId));
+        $rules = $this->container['discordSettingsModel']->getProjectEventRules($withMetadataProjectId);
+        $this->assertSame(0, $rules['task_update']['discord_enabled']);
+        $this->assertSame(1, $rules['task_update']['email_suppressed']);
+    }
+
+    public function testTaskDuplicationHookCopiesDiscordTaskRules()
+    {
+        $plugin = $this->loadPlugin();
+        $projectModel = new ProjectModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'task-rule-copy'));
+        $sourceTaskId = $this->createTask($projectId, 'Rule source');
+        $destinationTaskId = $this->createTask($projectId, 'Rule destination');
+
+        $this->saveTaskMetadata($sourceTaskId, array(
+            EventRegistry::getTaskMuteDiscordMetadataKey('task_update') => '1',
+            EventRegistry::getTaskMuteEmailMetadataKey('task_overdue') => '1',
+        ));
+
+        $values = array('source_task_id' => $sourceTaskId, 'destination_task_id' => $destinationTaskId);
+        $plugin->copyTaskEventRules($values);
+
+        $rules = $this->container['discordSettingsModel']->getTaskEventRules($destinationTaskId);
+        $this->assertSame(1, $rules['task_update']['mute_discord']);
+        $this->assertSame(1, $rules['task_overdue']['mute_email']);
+    }
+    public function testLegacyMetadataMigratesToPluginTablesAndDeletesSourceRows()
+    {
+        $plugin = new Plugin($this->container);
+        \Kanboard\Core\Tool::buildDIC($this->container, $plugin->getClasses());
+
+        $projectModel = new ProjectModel($this->container);
+        $userModel = new UserModel($this->container);
+        $projectId = $projectModel->create(array('name' => 'legacy-metadata'));
+        $taskId = $this->createTask($projectId, 'Legacy task');
+        $userId = $userModel->create(array('username' => 'legacy-metadata-user', 'name' => 'Legacy Metadata User'));
+        $pdo = $this->container['db']->getConnection();
+
+        $projectStatement = $pdo->prepare('INSERT INTO project_has_metadata (project_id, name, value) VALUES (?, ?, ?)');
+        $projectStatement->execute(array($projectId, DiscordNotification::META_WEBHOOK_URL, 'https://discord.com/api/webhooks/1/x'));
+        $projectStatement->execute(array($projectId, \Kanboard\Plugin\Discord\Builder\EmbedBuilder::KEY_EXCERPT_LENGTH, '10'));
+        $projectStatement->execute(array($projectId, EventRegistry::getDiscordProjectMetadataKey('subtask_update_status_inprogress'), '1'));
+        $projectStatement->execute(array($projectId, EventRegistry::getSuppressEmailProjectMetadataKey('subtask_update_status_inprogress'), '1'));
+
+        $taskStatement = $pdo->prepare('INSERT INTO task_has_metadata (task_id, name, value) VALUES (?, ?, ?)');
+        $taskStatement->execute(array($taskId, EventRegistry::getTaskMuteDiscordMetadataKey('subtask_update_status_inprogress'), '1'));
+        $taskStatement->execute(array($taskId, EventRegistry::getTaskMuteEmailMetadataKey('task_update'), '1'));
+
+        $userStatement = $pdo->prepare('INSERT INTO user_has_metadata (user_id, name, value) VALUES (?, ?, ?)');
+        $userStatement->execute(array($userId, DiscordNotification::META_USER_ID, '123456789012345678'));
+        $userStatement->execute(array($userId, Plugin::USER_META_DEFAULT_USER_NOTIFICATIONS_PROCESSED, '1'));
+
+        $this->installDiscordSchema();
+
+        $this->assertSame('https://discord.com/api/webhooks/1/x', $this->container['discordSettingsModel']->getProjectWebhookUrl($projectId));
+        $this->assertSame('10', $this->container['discordSettingsModel']->getProjectExcerptLength($projectId));
+        $projectRules = $this->container['discordSettingsModel']->getProjectEventRules($projectId);
+        $this->assertSame(1, $projectRules['subtask_update_status_inprogress']['discord_enabled']);
+        $this->assertSame(1, $projectRules['subtask_update_status_inprogress']['email_suppressed']);
+        $taskRules = $this->container['discordSettingsModel']->getTaskEventRules($taskId);
+        $this->assertSame(1, $taskRules['subtask_update_status_inprogress']['mute_discord']);
+        $this->assertSame(1, $taskRules['task_update']['mute_email']);
+        $this->assertSame('123456789012345678', $this->container['discordSettingsModel']->getDiscordUserId($userId));
+        $this->assertTrue($this->container['discordSettingsModel']->isDefaultNotificationsProcessed($userId));
+
+        $this->assertSame(0, (int) $pdo->query("SELECT COUNT(*) FROM project_has_metadata WHERE name IN ('discord_webhook_url', 'discord_excerpt_length', 'discord_event_subtask_update_status_inprogress', 'discord_suppress_email_subtask_update_status_inprogress')")->fetchColumn());
+        $this->assertSame(0, (int) $pdo->query("SELECT COUNT(*) FROM task_has_metadata WHERE name IN ('discord_task_mute_discord_subtask_update_status_inprogress', 'discord_task_mute_email_task_update')")->fetchColumn());
+        $this->assertSame(0, (int) $pdo->query("SELECT COUNT(*) FROM user_has_metadata WHERE name IN ('discord_user_id', 'discord.default_user_notifications.processed')")->fetchColumn());
     }
 }

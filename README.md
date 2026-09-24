@@ -121,16 +121,22 @@ AND project does not suppress Email for this event
 AND task does not mute Email for this event
 ```
 
-Settings are stored in Kanboard config and metadata tables. No database schema
-migration is required:
+Settings use Kanboard config for the global fallback and Discord plugin-owned
+tables for project/task/user state. Upgrades from older metadata-backed releases
+run an automatic schema migration that copies legacy Discord metadata and then
+removes those legacy rows:
 
-| Setting | Storage | Key format |
+| Setting | Storage | Key/columns |
 | --- | --- | --- |
 | Global default webhook | `settings` | `discord_default_webhook_url` |
-| Project Discord event | `project_has_metadata` | `discord_event_<event>` |
-| Project Email suppression | `project_has_metadata` | `discord_suppress_email_<event>` |
-| Task Discord mute | `task_has_metadata` | `discord_task_mute_discord_<event>` |
-| Task Email mute | `task_has_metadata` | `discord_task_mute_email_<event>` |
+| Project webhook / excerpt | `discord_project_settings` | `project_id`, `webhook_url`, `excerpt_length` |
+| Project event rules | `discord_project_event_rules` | `project_id`, `event_key`, `discord_enabled`, `email_suppressed` |
+| Task mute rules | `discord_task_event_rules` | `task_id`, `event_key`, `mute_discord`, `mute_email` |
+| User Discord ID / processed marker | `discord_user_settings` | `user_id`, `discord_user_id`, `default_notifications_processed` |
+
+The migration supports SQLite, MySQL/MariaDB, PostgreSQL and Microsoft SQL
+Server. Back up the Kanboard database before upgrading. If migration fails,
+Kanboard will keep the plugin schema version unchanged; preserve the error log when reporting it.
 
 Supported event rows:
 
@@ -270,9 +276,10 @@ cd <host-plugins-dir>/Discord
 git pull
 ```
 
-No container restart is required — Kanboard loads plugins on each request, and
-this plugin has no database schema migrations. The clone's `.git` and `Test/`
-directories are ignored by the plugin loader.
+No container restart is required — Kanboard loads plugins on each request.
+This plugin ships database schema migrations; Kanboard runs them automatically
+on upgrade. Back up the database before updating production installs. The
+clone's `.git` and `Test/` directories are ignored by the plugin loader.
 
 Troubleshooting
 ---------------

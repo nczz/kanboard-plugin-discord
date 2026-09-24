@@ -327,6 +327,8 @@ class EventRegistry
     }
 
     /**
+     * Build legacy project metadata key for an event-toggle option.
+     *
      * @param string $eventKey
      * @return string
      */
@@ -336,6 +338,8 @@ class EventRegistry
     }
 
     /**
+     * Build legacy project metadata key for an Email suppression option.
+     *
      * @param string $eventKey
      * @return string
      */
@@ -345,6 +349,8 @@ class EventRegistry
     }
 
     /**
+     * Build legacy task metadata key for a Discord mute option.
+     *
      * @param string $eventKey
      * @return string
      */
@@ -354,6 +360,8 @@ class EventRegistry
     }
 
     /**
+     * Build legacy task metadata key for an Email mute option.
+     *
      * @param string $eventKey
      * @return string
      */
@@ -363,110 +371,75 @@ class EventRegistry
     }
 
     /**
+     * Resolve a Discord project event flag from plugin-owned event rules.
+     *
      * @param string $eventKey
-     * @param array  $metadata
+     * @param array  $rules
      * @return bool
      */
-    public static function isDiscordProjectEventEnabled($eventKey, array $metadata)
+    public static function isDiscordProjectEventEnabled($eventKey, array $rules)
     {
         if (! self::supportsDiscordProjectEvent($eventKey)) {
             return false;
         }
 
-        $metadataKey = self::getDiscordProjectMetadataKey($eventKey);
-        if (array_key_exists($metadataKey, $metadata)) {
-            return (string) $metadata[$metadataKey] === '1';
-        }
-
-        foreach (self::getLegacyEventKeys($eventKey) as $legacyKey) {
-            $legacyMetadataKey = self::getDiscordProjectMetadataKey($legacyKey);
-            if (array_key_exists($legacyMetadataKey, $metadata)) {
-                return (string) $metadata[$legacyMetadataKey] === '1';
-            }
-        }
-
-        return self::isDiscordEventDefaultEnabled($eventKey);
+        $value = self::getRuleValue($rules, $eventKey, 'discord_enabled');
+        return $value === null ? self::isDiscordEventDefaultEnabled($eventKey) : (int) $value === 1;
     }
 
     /**
-     * @param string $eventKey
-     * @param array  $metadata
-     * @return bool
-     */
-    public static function isProjectEmailSuppressed($eventKey, array $metadata)
-    {
-        return self::isMetadataEnabled($eventKey, $metadata, self::META_SUPPRESS_EMAIL_PREFIX)
-            || (! self::hasMetadataOverride($eventKey, $metadata, self::META_SUPPRESS_EMAIL_PREFIX)
-                && self::isProjectEmailSuppressionDefaultEnabled($eventKey));
-    }
-
-    /**
-     * @param string $eventKey
-     * @param array  $metadata
-     * @return bool
-     */
-    public static function isTaskDiscordMuted($eventKey, array $metadata)
-    {
-        return self::isMetadataEnabled($eventKey, $metadata, self::META_TASK_MUTE_DISCORD_PREFIX);
-    }
-
-    /**
-     * @param string $eventKey
-     * @param array  $metadata
-     * @return bool
-     */
-    public static function isTaskEmailMuted($eventKey, array $metadata)
-    {
-        return self::isMetadataEnabled($eventKey, $metadata, self::META_TASK_MUTE_EMAIL_PREFIX);
-    }
-
-    /**
-     * Read a boolean metadata flag, allowing new split keys to inherit an older
-     * coarse setting until the project/task stores an explicit split-key value.
+     * Resolve an Email suppression flag from plugin-owned event rules.
      *
      * @param string $eventKey
-     * @param array  $metadata
-     * @param string $prefix
+     * @param array  $rules
      * @return bool
      */
-    protected static function isMetadataEnabled($eventKey, array $metadata, $prefix)
+    public static function isProjectEmailSuppressed($eventKey, array $rules)
     {
-        $metadataKey = $prefix.$eventKey;
-        if (array_key_exists($metadataKey, $metadata)) {
-            return (string) $metadata[$metadataKey] === '1';
-        }
-
-        foreach (self::getLegacyEventKeys($eventKey) as $legacyKey) {
-            $legacyMetadataKey = $prefix.$legacyKey;
-            if (array_key_exists($legacyMetadataKey, $metadata)) {
-                return (string) $metadata[$legacyMetadataKey] === '1';
-            }
-        }
-
-        return false;
+        $value = self::getRuleValue($rules, $eventKey, 'email_suppressed');
+        return $value === null ? self::isProjectEmailSuppressionDefaultEnabled($eventKey) : (int) $value === 1;
     }
 
     /**
-     * Return true when metadata explicitly stores this key or any legacy key.
+     * Resolve a task Discord mute flag from plugin-owned task rules.
      *
      * @param string $eventKey
-     * @param array  $metadata
-     * @param string $prefix
+     * @param array  $rules
      * @return bool
      */
-    protected static function hasMetadataOverride($eventKey, array $metadata, $prefix)
+    public static function isTaskDiscordMuted($eventKey, array $rules)
     {
-        if (array_key_exists($prefix.$eventKey, $metadata)) {
-            return true;
+        return (int) self::getRuleValue($rules, $eventKey, 'mute_discord', 0) === 1;
+    }
+
+    /**
+     * Resolve a task Email mute flag from plugin-owned task rules.
+     *
+     * @param string $eventKey
+     * @param array  $rules
+     * @return bool
+     */
+    public static function isTaskEmailMuted($eventKey, array $rules)
+    {
+        return (int) self::getRuleValue($rules, $eventKey, 'mute_email', 0) === 1;
+    }
+
+    /**
+     * Return a rule value from the new table-backed rule shape.
+     *
+     * @param array  $rules
+     * @param string $eventKey
+     * @param string $field
+     * @param mixed  $default
+     * @return mixed
+     */
+    protected static function getRuleValue(array $rules, $eventKey, $field, $default = null)
+    {
+        if (isset($rules[$eventKey]) && is_array($rules[$eventKey]) && array_key_exists($field, $rules[$eventKey])) {
+            return $rules[$eventKey][$field];
         }
 
-        foreach (self::getLegacyEventKeys($eventKey) as $legacyKey) {
-            if (array_key_exists($prefix.$legacyKey, $metadata)) {
-                return true;
-            }
-        }
-
-        return false;
+        return $default;
     }
 
     /**

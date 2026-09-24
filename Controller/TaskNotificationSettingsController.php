@@ -20,7 +20,7 @@ class TaskNotificationSettingsController extends BaseController
 
         $this->response->html($this->template->render('discord:task/notification_settings', array(
             'task' => $task,
-            'values' => $this->taskMetadataModel->getAll($task['id']),
+            'rules' => $this->discordSettingsModel->getTaskEventRules($task['id']),
         )));
     }
 
@@ -32,28 +32,18 @@ class TaskNotificationSettingsController extends BaseController
         $this->checkCSRFForm();
         $task = $this->getEditableTask();
         $values = $this->request->getValues();
-        $metadata = array();
+        $submittedRules = isset($values['rules']) && is_array($values['rules']) ? $values['rules'] : array();
+        $rules = array();
 
         foreach (EventRegistry::getEventKeys() as $eventKey) {
-            $discordKey = EventRegistry::getTaskMuteDiscordMetadataKey($eventKey);
-            $emailKey = EventRegistry::getTaskMuteEmailMetadataKey($eventKey);
-
-            if (EventRegistry::supportsDiscordProjectEvent($eventKey) && isset($values[$discordKey]) && (string) $values[$discordKey] === '1') {
-                $metadata[$discordKey] = '1';
-            } else {
-                $this->taskMetadataModel->remove($task['id'], $discordKey);
-            }
-
-            if (isset($values[$emailKey]) && (string) $values[$emailKey] === '1') {
-                $metadata[$emailKey] = '1';
-            } else {
-                $this->taskMetadataModel->remove($task['id'], $emailKey);
-            }
+            $rule = isset($submittedRules[$eventKey]) && is_array($submittedRules[$eventKey]) ? $submittedRules[$eventKey] : array();
+            $rules[$eventKey] = array(
+                'mute_discord' => EventRegistry::supportsDiscordProjectEvent($eventKey) && isset($rule['mute_discord']) && (string) $rule['mute_discord'] === '1' ? 1 : 0,
+                'mute_email'   => isset($rule['mute_email']) && (string) $rule['mute_email'] === '1' ? 1 : 0,
+            );
         }
 
-        if (! empty($metadata)) {
-            $this->taskMetadataModel->save($task['id'], $metadata);
-        }
+        $this->discordSettingsModel->saveTaskEventRules($task['id'], $rules);
 
         $this->flash->success(t('Task notification rules updated successfully.'));
         $this->response->redirect($this->helper->url->to('TaskViewController', 'show', array('task_id' => $task['id'])), true);

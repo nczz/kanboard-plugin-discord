@@ -114,14 +114,14 @@ class ConditionalMailNotification extends Base implements NotificationInterface
             return false;
         }
 
-        $projectMetadata = $this->projectMetadataModel->getAll((int) $task['project_id']);
-        $taskMetadata = ! empty($task['id'])
-            ? $this->taskMetadataModel->getAll((int) $task['id'])
+        $projectRules = $this->discordSettingsModel->getProjectEventRules((int) $task['project_id']);
+        $taskRules = ! empty($task['id'])
+            ? $this->discordSettingsModel->getTaskEventRules((int) $task['id'])
             : array();
 
         foreach ($eventKeys as $eventKey) {
-            if (! EventRegistry::isProjectEmailSuppressed($eventKey, $projectMetadata)
-                && ! EventRegistry::isTaskEmailMuted($eventKey, $taskMetadata)) {
+            if (! EventRegistry::isProjectEmailSuppressed($eventKey, $projectRules)
+                && ! EventRegistry::isTaskEmailMuted($eventKey, $taskRules)) {
                 return false;
             }
         }
